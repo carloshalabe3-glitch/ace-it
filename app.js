@@ -664,16 +664,19 @@
       var targets = [];
       for (var F = hi; F >= lo && targets.length < 5; F--) targets.push(F);
       var pendNames = r.pendingSlots.map(function (sl) { return (sl.item ? sl.item.name : sl.cat.name) + ' (' + fmtW(sl.w) + ')'; });
-      h += '<section class="card"><div class="card-head"><h3>What you need</h3><span class="card-note">on the ' + fmtW(r.pendingWeight) + ' left</span></div>';
+      var onePending = r.pendingSlots.length === 1;
+      var onWhat = onePending ? 'on ' + (r.pendingSlots[0].item ? r.pendingSlots[0].item.name : r.pendingSlots[0].cat.name) : 'average on what’s left';
+      h += '<section class="card"><div class="card-head"><h3>What you need</h3><span class="card-note">' + fmtW(r.pendingWeight) + ' left</span></div>';
       targets.forEach(function (F) {
         var need = G.neededForFinal(c, F, { assumed: assumed() });
         var val;
         if (need.status === 'secured') val = chip('Already secured', 'good');
-        else if (need.status === 'impossible') val = chip('Impossible (needs ' + (isNum(need.average) ? ceil2(need.average) : '>10') + ')');
-        else val = '<b>' + ceil2(need.average) + '</b><small>average on what’s left</small>';
-        h += '<div class="need-row"><span class="need-target">Final ' + F + '<small>Raw ' + G.minRawFor(F, t).toFixed(2) + ' or more</small></span><span class="need-val">' + val + '</span></div>';
+        else if (need.status === 'impossible') val = chip('Not possible' + (isNum(need.average) ? ' (needs ' + ceil2(need.average) + ')' : ''));
+        else val = '<b>' + ceil2(need.average) + '</b><small>' + esc(onWhat) + '</small>';
+        h += '<div class="need-row"><span class="need-target">To get ' + (F === 8 ? 'an ' : 'a ') + F + '<small>Raw ' + G.minRawFor(F, t).toFixed(2) + ' or more</small></span><span class="need-val">' + val + '</span></div>';
       });
-      h += '<p class="hint">' + (pendNames.length === 1 ? 'Pending: ' : 'The same average on each pending item: ') + esc(pendNames.join(', ')) + '.</p></section>';
+      h += '<p class="hint">' + (onePending ? 'Left to grade: ' : 'Left to grade (the same average on each): ') + esc(pendNames.join(', ')) + '.' +
+        (G.hasPendingAdjustments(c.adjustments) || r.withOwed != null ? ' Owed points aren’t counted until you switch them on.' : '') + '</p></section>';
     }
 
     // Categories and items
