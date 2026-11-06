@@ -892,21 +892,28 @@
 
   // ---------- course ----------
 
-  function courseSheet(course, termId) {
+  function courseSheet(course, termId, opts) {
+    opts = opts || {};
     var isNew = !course;
     var terms = sortedTerms();
     var c = course || { name: '', professor: '', termId: termId || (terms.length ? terms[terms.length - 1].id : null), mode: 'weighted', counts: true, done: false, posted: null,
       rounding: { threshold: data.settings.defaultThreshold, unconfirmed: false }, single: { expected: null, low: null, high: null }, weightsUnconfirmed: false };
     var mode = c.mode, threshold = c.rounding.threshold;
     var s = c.single || {};
+    // Logging a past term: if every course already in it is finished, assume this one is too.
+    var termCourses = isNew && c.termId ? coursesOf(c.termId) : [];
+    var finished = isNew && (opts.finished != null ? opts.finished : termCourses.length > 0 && termCourses.every(isFinal));
     var html = '<h2>' + (isNew ? 'New course' : 'Edit course') + '</h2>' +
       '<div class="field"><label for="cName">Course name</label><input type="text" id="cName" maxlength="60" autocomplete="off" placeholder="Statistics" value="' + esc(c.name) + '"></div>' +
       '<div class="field"><label for="cProf">Professor <span class="opt">optional</span></label><input type="text" id="cProf" maxlength="60" autocomplete="off" value="' + esc(c.professor) + '"></div>' +
       (terms.length > 1 || !isNew ? '<div class="field"><label for="cTerm">Term</label><select id="cTerm">' + terms.map(function (t) { return '<option value="' + t.id + '"' + (t.id === c.termId ? ' selected' : '') + '>' + esc(termLabel(t)) + '</option>'; }).join('') + '</select></div>' : '') +
+      (isNew ? '<div class="field-inline"><span>Already finished<small style="display:block;color:var(--ink-soft);font-size:.8rem">You have the final grade</small></span>' + switchHTML('c-finished', finished) + '</div>' +
+        '<div class="field" id="finishedFields"><label for="cFinal">Final grade</label><input type="text" inputmode="decimal" id="cFinal" autocomplete="off" placeholder="10, or 9.47 if it has decimals">' +
+        '<p class="field-hint" id="finalHint">As the school posted it. Counts toward your official average.</p></div>' : '') +
       '<div class="field"><span class="field-label">Rounding rule</span>' + segHTML('c-rule', [{ val: 5, label: 'From .5' }, { val: 6, label: 'From .6' }], threshold) +
       '<p class="field-hint" id="ruleHint"></p></div>' +
       '<div class="field-inline"><span>Rule unconfirmed</span>' + switchHTML('c-rule-unc', c.rounding.unconfirmed) + '</div>' +
-      '<div class="field"><span class="field-label">How it’s graded</span>' + segHTML('c-mode', [{ val: 'weighted', label: 'Weighted' }, { val: 'single', label: 'Single grade' }], mode) + '</div>' +
+      '<div id="planFields"><div class="field"><span class="field-label">How it’s graded</span>' + segHTML('c-mode', [{ val: 'weighted', label: 'Weighted' }, { val: 'single', label: 'Single grade' }], mode) + '</div>' +
       '<div id="weightedFields">' + (isNew ?
         '<div class="field"><label for="cCats">Categories and weights</label><input type="text" id="cCats" autocomplete="off" placeholder="Exams 60 / Homework 40">' +
         '<p class="field-hint">Separate with a slash. You can add items now or later.</p></div>' +
@@ -915,24 +922,60 @@
       '<div id="singleFields"><p class="field-hint" style="margin:-0.4rem 0 0.8rem">No grades until the end. Enter what you expect; it counts as an estimate.</p>' +
       '<div class="field-trio"><div class="field"><label for="sExp">Expected</label><input type="text" inputmode="decimal" id="sExp" value="' + (isNum(s.expected) ? s.expected : '') + '" placeholder="9"></div>' +
       '<div class="field"><label for="sLow">Low <span class="opt">opt.</span></label><input type="text" inputmode="decimal" id="sLow" value="' + (isNum(s.low) ? s.low : '') + '"></div>' +
-      '<div class="field"><label for="sHigh">High <span class="opt">opt.</span></label><input type="text" inputmode="decimal" id="sHigh" value="' + (isNum(s.high) ? s.high : '') + '"></div></div></div>' +
+      '<div class="field"><label for="sHigh">High <span class="opt">opt.</span></label><input type="text" inputmode="decimal" id="sHigh" value="' + (isNum(s.high) ? s.high : '') + '"></div></div></div></div>' +
       '<div class="field-inline"><span>Counts toward average</span>' + switchHTML('c-counts', c.counts) + '</div>' +
       '<div class="field-error" data-main></div>' +
-      '<div class="sheet-actions"><button class="btn" data-act="cancel">Cancel</button><button class="btn btn-primary" data-act="save">' + (isNew ? 'Add course' : 'Save') + '</button></div>';
+      '<div class="sheet-actions"><button class="btn" data-act="cancel" id="cCancel">Cancel</button>' + (isNew ? '<button class="btn" data-act="save-another" id="cAnother">Add another</button>' : '') +
+      '<button class="btn btn-primary" data-act="save">' + (isNew ? 'Add course' : 'Save') + '</button></div>';
     openSheet(html, function (bd) {
+      function finalHint() {
+        var node = q(bd, '#finalHint');
+        if (!node) return;
+        var v = num(val(bd, '#cFinal'));
+        node.textContent = v !== null && !isNaN(v) && v >= 0 && v <= 10 && Math.round(v) !== v
+          ? G.fmtRaw(v, threshold) + ' rounds to ' + G.roundFinal(v, threshold) + ' in your official average.'
+          : 'As the school posted it. Counts toward your official average.';
+      }
       function sync() {
+        q(bd, '#planFields').classList.toggle('hidden', finished);
         q(bd, '#weightedFields').classList.toggle('hidden', mode !== 'weighted');
         q(bd, '#singleFields').classList.toggle('hidden', mode !== 'single');
+        if (q(bd, '#finishedFields')) q(bd, '#finishedFields').classList.toggle('hidden', !finished);
+        if (q(bd, '#cAnother')) { q(bd, '#cAnother').classList.toggle('hidden', !finished); q(bd, '#cCancel').classList.toggle('hidden', finished); }
         q(bd, '#ruleHint').textContent = threshold === 6 ? '8.6 becomes 9, and 8.5 stays 8.' : '8.5 becomes 9, and 9.49 stays 9.';
+        finalHint();
       }
       bd._segs['c-rule'] = function (v) { threshold = +v; sync(); };
       bd._segs['c-mode'] = function (v) { mode = v; sync(); };
+      bd._sws['c-finished'] = function (on) { finished = on; sync(); if (on) q(bd, '#cFinal').focus(); };
+      if (q(bd, '#cFinal')) q(bd, '#cFinal').addEventListener('input', finalHint);
       sync();
       if (isNew) setTimeout(function () { q(bd, '#cName').focus(); }, 350);
       bd._acts.cancel = function () { closeSheet(bd); };
-      bd._acts.save = function () {
+      bd._acts['save-another'] = function () { save(true); };
+      bd._acts.save = function () { save(false); };
+      function save(another) {
         var name = val(bd, '#cName').trim();
         if (!name) { setErr(bd, 'Give the course a name.'); return; }
+        var termPick = q(bd, '#cTerm') ? val(bd, '#cTerm') : c.termId;
+        if (!termPick) { setErr(bd, 'Add a term first.'); return; }
+        if (finished) {
+          var fin = num(val(bd, '#cFinal'));
+          if (fin === null || isNaN(fin) || fin < 0 || fin > 10) { setErr(bd, 'Enter the final grade, from 0 to 10.'); return; }
+          var done = {
+            id: S.uid('c'), termId: termPick, name: name, professor: val(bd, '#cProf').trim(),
+            rounding: { threshold: threshold, unconfirmed: q(bd, '[data-sw="c-rule-unc"]').checked },
+            mode: 'single', counts: q(bd, '[data-sw="c-counts"]').checked, done: true, posted: fin,
+            categories: [], weightsUnconfirmed: false, altWeights: null, expectedPending: null,
+            single: { expected: null, low: null, high: null }, adjustments: [], createdAt: Date.now()
+          };
+          data.courses.push(done);
+          closeSheet(bd);
+          commit();
+          showToast('Added ' + name + ' · ' + (Math.round(fin) === fin ? fin : G.fmtRaw(fin, threshold) + ' → ' + G.roundFinal(fin, threshold)));
+          if (another) setTimeout(function () { courseSheet(null, termPick, { finished: true }); }, 250);
+          return;
+        }
         var exp = num(val(bd, '#sExp')), low = num(val(bd, '#sLow')), high = num(val(bd, '#sHigh'));
         var bad = [exp, low, high].some(function (v) { return v !== null && (isNaN(v) || v < 0 || v > 10); });
         if (mode === 'single' && bad) { setErr(bd, 'Grades go from 0 to 10.'); return; }
@@ -965,7 +1008,7 @@
           var top = ui.stack.length ? ui.stack[ui.stack.length - 1] : null;
           if (!(top && top.type === 'course' && top.id === target.id)) push('course', target.id);
         }
-      };
+      }
     });
   }
 
