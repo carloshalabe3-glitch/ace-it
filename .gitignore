@@ -1,0 +1,8 @@
+.DS_Store
+node_modules/
+# Personal data never goes in this public repo.
+*seed*.json
+*backup*.json
+ace-it-private/
+private/
+.claude/

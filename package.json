@@ -1,0 +1,10 @@
+{
+  "name": "ace-it",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Grade calculator and grade log PWA. No build step; this file only holds the test script.",
+  "scripts": {
+    "test": "node tests/run.js",
+    "serve": "python3 serve.py 8080"
+  }
+}
