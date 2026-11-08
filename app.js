@@ -918,8 +918,12 @@
       '<div class="field-inline"><span>Rule unconfirmed</span>' + switchHTML('c-rule-unc', c.rounding.unconfirmed) + '</div>' +
       '<div id="planFields"><div class="field"><span class="field-label">How it’s graded</span>' + segHTML('c-mode', [{ val: 'weighted', label: 'Weighted' }, { val: 'single', label: 'Single grade' }], mode) + '</div>' +
       '<div id="weightedFields">' + (isNew ?
-        '<div class="field"><label for="cCats">Categories and weights</label><input type="text" id="cCats" autocomplete="off" placeholder="Exams 60 / Homework 40">' +
-        '<p class="field-hint">Separate with a slash. You can add items now or later.</p></div>' +
+        '<div class="field"><span class="field-label">Categories and weights</span>' +
+        '<div class="edit-row"><span class="edit-row-head">Category</span><span class="edit-row-head">Weight %</span><span></span></div>' +
+        '<div id="newCatRows" class="edit-rows"></div>' +
+        '<button type="button" class="add-row" data-act="add-cat-row" style="border-top:none;padding-left:0"><svg><use href="#sym-plus"/></svg>Add category</button>' +
+        '<div class="sum-line" id="newCatSum"></div>' +
+        '<p class="field-hint">You can add items to each category now or later.</p></div>' +
         '<div class="field-inline"><span>Weights unconfirmed</span>' + switchHTML('c-w-unc', false) + '</div>'
         : '<p class="field-hint" style="margin:-0.4rem 0 1rem">Edit categories from the course screen.</p>') + '</div>' +
       '<div id="singleFields"><p class="field-hint" style="margin:-0.4rem 0 0.8rem">No grades until the end. Enter what you expect; it counts as an estimate.</p>' +
@@ -952,6 +956,67 @@
       bd._segs['c-mode'] = function (v) { mode = v; sync(); };
       bd._sws['c-finished'] = function (on) { finished = on; sync(); if (on) q(bd, '#cFinal').focus(); };
       if (q(bd, '#cFinal')) q(bd, '#cFinal').addEventListener('input', finalHint);
+
+      // Category rows: a name and a weight per row, + adds another.
+      var catRows = [{ name: '', weight: '' }, { name: '', weight: '' }];
+      var CAT_EXAMPLES = ['Exams', 'Homework', 'Project', 'Quizzes', 'Participation'];
+      function drawCats(focusIndex) {
+        var box = q(bd, '#newCatRows');
+        if (!box) return;
+        box.innerHTML = catRows.map(function (r, i) {
+          return '<div class="edit-row" data-i="' + i + '">' +
+            '<input class="input" data-f="name" value="' + esc(r.name) + '" placeholder="' + (CAT_EXAMPLES[i] || 'Category') + '" maxlength="40" autocomplete="off" enterkeyhint="next" aria-label="Category ' + (i + 1) + ' name">' +
+            '<input class="input" data-f="weight" value="' + esc(r.weight) + '" placeholder="%" inputmode="decimal" enterkeyhint="next" aria-label="Category ' + (i + 1) + ' weight">' +
+            '<button type="button" class="mini-btn" data-act="remove-cat-row" data-i="' + i + '" aria-label="Remove category ' + (i + 1) + '"><svg><use href="#sym-close"/></svg></button></div>';
+        }).join('');
+        catSum();
+        if (focusIndex != null) { var f = box.querySelectorAll('[data-f="name"]')[focusIndex]; if (f) f.focus(); }
+      }
+      function catSum() {
+        var node = q(bd, '#newCatSum');
+        var weights = catRows.map(function (r) { return num(r.weight); }).filter(function (v) { return v !== null && !isNaN(v); });
+        if (!weights.length) { node.textContent = ''; return; }
+        var tot = weights.reduce(function (a, b) { return a + b; }, 0);
+        var left = 100 - tot;
+        node.textContent = 'Total ' + G.fmtNum(tot) + '%' + (Math.abs(left) < 0.01 ? '' : left > 0 ? ' · ' + G.fmtNum(left) + '% left to assign' : ' · over 100%');
+        node.classList.toggle('is-off', Math.abs(left) >= 0.01);
+      }
+      if (q(bd, '#newCatRows')) {
+        q(bd, '#newCatRows').addEventListener('input', function (e) {
+          var row = e.target.closest('.edit-row'); if (!row || !e.target.dataset.f) return;
+          catRows[+row.dataset.i][e.target.dataset.f] = e.target.value;
+          if (e.target.dataset.f === 'weight') catSum();
+        });
+        // Return moves on: name -> weight -> next row (a new one after the last).
+        q(bd, '#newCatRows').addEventListener('keydown', function (e) {
+          if (e.key !== 'Enter') return;
+          var row = e.target.closest('.edit-row'); if (!row) return;
+          e.preventDefault();
+          var i = +row.dataset.i;
+          if (e.target.dataset.f === 'name') { row.querySelector('[data-f="weight"]').focus(); return; }
+          if (i === catRows.length - 1) { catRows.push({ name: '', weight: '' }); drawCats(i + 1); }
+          else q(bd, '#newCatRows').querySelectorAll('[data-f="name"]')[i + 1].focus();
+        });
+        bd._acts['add-cat-row'] = function () { catRows.push({ name: '', weight: '' }); drawCats(catRows.length - 1); };
+        bd._acts['remove-cat-row'] = function (el) {
+          if (catRows.length === 1) catRows[0] = { name: '', weight: '' };
+          else catRows.splice(+el.dataset.i, 1);
+          drawCats();
+        };
+        drawCats();
+      }
+      function readCats() {
+        var out = [];
+        for (var i = 0; i < catRows.length; i++) {
+          var nm = catRows[i].name.trim(), w = num(catRows[i].weight);
+          if (!nm && w === null) continue;
+          if (!nm) return { error: 'Name the category that’s worth ' + catRows[i].weight + '%.' };
+          if (w === null) return { error: 'Give ' + nm + ' a weight.' };
+          if (isNaN(w) || w < 0 || w > 100) return { error: 'Weights go from 0 to 100.' };
+          out.push({ name: nm, weight: w });
+        }
+        return { cats: out };
+      }
       sync();
       if (isNew) setTimeout(function () { q(bd, '#cName').focus(); }, 350);
       bd._acts.cancel = function () { closeSheet(bd); };
@@ -985,8 +1050,9 @@
         if (mode === 'single' && low !== null && high !== null && low > high) { setErr(bd, 'Low should be below high.'); return; }
         var cats = [];
         if (isNew && mode === 'weighted') {
-          cats = G.parseCategories(val(bd, '#cCats'));
-          if (cats.some(function (g) { return g.weight === null; })) { setErr(bd, 'Give each category a weight, like “Exams 60 / Homework 40”.'); return; }
+          var parsed = readCats();
+          if (parsed.error) { setErr(bd, parsed.error); return; }
+          cats = parsed.cats;
         }
         var target = course || {
           id: S.uid('c'), categories: [], adjustments: [], altWeights: null, expectedPending: null, done: false, posted: null, createdAt: Date.now(),
