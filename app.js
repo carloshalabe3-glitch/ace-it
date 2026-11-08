@@ -170,6 +170,7 @@
     var prev = ui.stack[index - 1];
     if (prev.type === 'term') return termLabel(termById(prev.id)) || 'Back';
     if (prev.type === 'course') { var c = courseById(prev.id); return c ? c.name : 'Back'; }
+    if (prev.type === 'whatif') return 'What if';
     return 'Back';
   }
 
@@ -190,6 +191,7 @@
     var entry = ui.stack.pop();
     if (!entry) return;
     entry.el.remove();
+    if (entry.type === 'whatif') ui.whatIf = null;  // leaving throws the sandbox away
     var under = topScreen();
     if (ui.stack.length) renderEntry(ui.stack[ui.stack.length - 1], ui.stack.length - 1);
     else renderTab(ui.tab);
@@ -226,6 +228,8 @@
       var c = courseById(entry.id);
       if (!c) return false;
       renderCourse(entry.el, c, backLabelFor(index));
+    } else if (entry.type === 'whatif') {
+      renderWhatIf(entry.el, backLabelFor(index));
     }
     return true;
   }
@@ -427,6 +431,9 @@
       if (s.inProgress) parts.push(plural(s.inProgress, 'course') + ' in progress at expected finals');
       if (s.future) parts.push(plural(s.future, 'future course') + ' at ' + G.fmtNum(s.assumed) + ' (assumed)');
       if (parts.length) h += '<p class="hint">Projected: ' + esc(parts.join(', ')) + '.</p>';
+    }
+    if (s.inProgress > 0 || s.future > 0) {
+      h += '<button class="btn btn-block whatif-open" data-act="open-whatif">' + icon('target') + 'What if…<small>Try grades and see your average</small></button>';
     }
 
     // Tiers
@@ -713,6 +720,133 @@
     var p = key.split('-');
     var d = new Date(+p[0], +p[1] - 1, +p[2]);
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  // ================================================================
+  // What if (a sandbox: nothing here is ever saved)
+  // ================================================================
+
+  function whatIfCourses() {
+    return data.courses.filter(function (c) { return c.counts && !isFinal(c); });
+  }
+
+  // Every in-progress course starts at its expected rounded final; future courses at the assumed grade.
+  function startWhatIf() {
+    var finals = {};
+    whatIfCourses().forEach(function (c) {
+      var r = result(c);
+      finals[c.id] = isNum(r.expectedFinal) ? r.expectedFinal : G.roundFinal(assumed(), thr(c));
+    });
+    ui.whatIf = { finals: finals, future: Math.round(assumed() * 10) / 10 };
+  }
+
+  // A throwaway copy of the data with the chosen grades posted as finals.
+  function whatIfData() {
+    var copy = JSON.parse(JSON.stringify(data));
+    copy.courses.forEach(function (c) {
+      if (Object.prototype.hasOwnProperty.call(ui.whatIf.finals, c.id)) { c.done = true; c.posted = ui.whatIf.finals[c.id]; }
+    });
+    copy.settings.futureAssumed = ui.whatIf.future;
+    return copy;
+  }
+
+  function whatIfSummary() {
+    var s = G.summarize(whatIfData());
+    return { s: s, value: s.future > 0 ? s.projected : s.official };
+  }
+
+  // Live parts: the average card, the goals, and the average in the top bar.
+  function refreshWhatIf() {
+    var w = whatIfSummary();
+    if ($('wiResults')) $('wiResults').innerHTML = whatIfHeroHTML(w);
+    if ($('wiGoals')) $('wiGoals').innerHTML = whatIfGoalsHTML(w);
+    var title = document.querySelector('.screen.is-active .topbar-title');
+    if (title) title.textContent = 'What if · ' + G.fmtAvg(w.value);
+  }
+
+  function whatIfHeroHTML(w) {
+    var real = G.summarize(data);
+    var s = w.s, value = w.value;
+    var before = real.projected;
+    var h = '<section class="hero hero-whatif"><div class="hero-label">' + (s.future > 0 ? 'What-if average, whole degree' : 'What-if cumulative') + '</div>' +
+      '<div class="hero-value">' + G.fmtAvg(value) + '</div>';
+    if (isNum(before) && isNum(value)) {
+      var d = Math.round((value - before) * 100) / 100;
+      var dTxt = Math.abs(d) < 0.005 ? 'same as now' : (d > 0 ? '+' : '−') + Math.abs(d).toFixed(2) + ' vs now';
+      h += '<div class="hero-sub">Now (projected): ' + G.fmtAvg(before) + ' · <b>' + dTxt + '</b></div>';
+    }
+    if (s.future > 0 && isNum(s.official)) h += '<div class="hero-sub">After these courses: ' + G.fmtAvg(s.official) + '</div>';
+    return h + '</section>';
+  }
+
+  function whatIfGoalsHTML(w) {
+    var s = w.s, h = '';
+    if (s.tiers.length) {
+      h += '<section class="card card-flush"><div class="card-head"><h3>Goals</h3></div>';
+      s.tiers.forEach(function (tier) {
+        var st = TIER_STATUS[tier.status] || TIER_STATUS.out;
+        var detail;
+        if (tier.status === 'none') detail = 'Add courses to see where you’d stand.';
+        else if (tier.remaining === 0) {
+          var gap = tier.target * s.denominator - s.officialSum;
+          var pts = Math.ceil(gap - 1e-9);
+          detail = gap <= 1e-9 ? 'Reached with these grades.' : pts === 1 ? 'Short by 1 point: raise any one course by 1.' : 'Short by ' + pts + ' points: raise your courses by ' + pts + ' in total.';
+        } else {
+          var R = tier.remaining;
+          if (tier.neededAverage <= 0) detail = 'Held whatever happens in the ' + plural(R, 'course') + ' after these.';
+          else if (tier.neededAverage > 10 + 1e-9) detail = 'Would need more than a 10 average on the ' + plural(R, 'course') + ' after these.';
+          else {
+            detail = 'Then needs a <b class="num">' + ceil2(tier.neededAverage) + '</b> average on the ' + plural(R, 'course') + ' after these.';
+            if (tier.ninesAffordable === R) detail += ' Every one could be a 9.';
+            else if (tier.ninesAffordable === 0) detail += ' Every one needs a 10.';
+            else if (tier.ninesAffordable != null) detail += ' Room for ' + (tier.ninesAffordable === 1 ? 'one 9' : tier.ninesAffordable + ' 9s') + '.';
+          }
+        }
+        h += '<div class="tier"><div class="tier-top"><span class="tier-name">' + esc(tier.name) + '<span class="num">' + G.fmtNum(tier.target) + '</span></span>' +
+          '<span class="chip ' + (st.kind ? 'chip-' + st.kind : '') + '">' + (tier.status === 'secured' && tier.remaining === 0 ? 'Reached' : tier.status === 'out' && tier.remaining === 0 ? 'Not reached' : st.label) + '</span></div><div class="tier-detail">' + detail + '</div></div>';
+      });
+      h += '</section>';
+    }
+    return h;
+  }
+
+  function renderWhatIf(el, backLabel) {
+    if (!ui.whatIf) startWhatIf();
+    var courses = whatIfCourses();
+    var real = G.summarize(data);
+    var w = whatIfSummary();
+    var h = subbarHTML(backLabel, 'What if · ' + G.fmtAvg(w.value), '<button class="text-btn" data-act="wi-reset">Reset</button>');
+    h += '<div class="page-head"><h2>What if</h2></div>';
+    h += '<div class="whatif-banner">' + icon('target') + '<span>Try final grades for your courses. Nothing here is saved, and your real grades don’t change.</span></div>';
+    h += '<div id="wiResults">' + whatIfHeroHTML(w) + '</div>';
+
+    if (courses.length) {
+      h += '<div class="section-label">Your courses in progress</div><section class="card card-flush" style="margin-top:0">';
+      courses.forEach(function (c) {
+        var r = result(c);
+        var now = isNum(r.expectedFinal) ? r.expectedFinal : null;
+        var pick = ui.whatIf.finals[c.id];
+        var options = [10, 9, 8, 7, 6];
+        [now, pick].forEach(function (v) { if (isNum(v) && options.indexOf(v) < 0) options.push(v); });
+        options.sort(function (a, b) { return b - a; });
+        h += '<div class="wi-course"><div class="wi-course-top"><span class="row-title">' + esc(c.name) + '</span>' +
+          '<span class="row-sub">' + (isNum(r.raw) ? 'Now ' + pairHTML(r.raw, thr(c), r.estimate ? 'is-est' : '') : 'No grades yet') + '</span></div>' +
+          '<div class="wi-picks" role="radiogroup" aria-label="' + esc(c.name) + ' final grade">' + options.map(function (v) {
+            return '<button class="wi-pick' + (v === pick ? ' is-on' : '') + (v === now ? ' is-now' : '') + '" data-act="wi-pick" data-id="' + c.id + '" data-val="' + v + '" role="radio" aria-checked="' + (v === pick) + '">' + v + '</button>';
+          }).join('') + '</div></div>';
+      });
+      h += '</section><p class="hint">The dot marks each course’s expected final right now.</p>';
+    } else {
+      h += '<section class="card">' + emptyHTML('book', 'Nothing in progress', 'Add this semester’s courses first, then come back to try grades.', '', '') + '</section>';
+    }
+
+    if (real.future > 0) {
+      h += '<div class="section-label">The rest of your degree</div><section class="card" style="margin-top:0">' +
+        '<div class="wi-slider-head"><span>' + plural(real.future, 'future course') + ' average</span><b class="num" id="wiFutureVal">' + G.fmtNum(ui.whatIf.future, 1) + '</b></div>' +
+        '<input type="range" id="wiFuture" min="6" max="10" step="0.1" value="' + ui.whatIf.future + '" aria-label="Future courses average"></section>';
+    }
+    h += '<div id="wiGoals">' + whatIfGoalsHTML(w) + '</div>';
+    el.innerHTML = h;
   }
 
   // ================================================================
@@ -1580,6 +1714,19 @@
     back: function () { pop(false); },
     'open-term': function (el) { push('term', el.dataset.id); },
     'open-course': function (el) { push('course', el.dataset.id); },
+    'open-whatif': function () { startWhatIf(); push('whatif', 'sandbox'); },
+    'wi-pick': function (el) {
+      if (!ui.whatIf) return;
+      ui.whatIf.finals[el.dataset.id] = +el.dataset.val;
+      var top = ui.stack[ui.stack.length - 1];
+      if (top && top.type === 'whatif') renderWhatIf(top.el, backLabelFor(ui.stack.length - 1));
+    },
+    'wi-reset': function () {
+      startWhatIf();
+      var top = ui.stack[ui.stack.length - 1];
+      if (top && top.type === 'whatif') renderWhatIf(top.el, backLabelFor(ui.stack.length - 1));
+      showToast('Back to your expected grades.');
+    },
     'add-term': function () { termSheet(null); },
     'edit-term': function (el) { termSheet(termById(el.dataset.id)); },
     'add-course': function (el) {
@@ -1674,6 +1821,15 @@
     var act = sheet ? sheet._acts[el.dataset.act] : ACTIONS[el.dataset.act];
     if (act) { e.preventDefault(); act(el, e); }
   });
+  // The what-if slider updates the numbers live without redrawing itself mid-drag.
+  document.addEventListener('input', function (e) {
+    if (e.target.id !== 'wiFuture' || !ui.whatIf) return;
+    ui.whatIf.future = +e.target.value;
+    var lab = $('wiFutureVal');
+    if (lab) lab.textContent = G.fmtNum(ui.whatIf.future, 1);
+    refreshWhatIf();
+  });
+
   document.addEventListener('change', function (e) {
     var sw = e.target.closest('[data-sw]');
     if (!sw) return;
