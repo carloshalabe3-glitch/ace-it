@@ -302,6 +302,30 @@
     return out;
   }
 
+  // What one pending item needs for the course to finish with `finalTarget`, with every
+  // other pending item at the expected-case grade (your average, or the number you set).
+  // status: 'secured' (any grade does it) | 'needed' | 'impossible' | 'na'
+  function neededOnItem(course, itemId, finalTarget, opts) {
+    var out = { target: finalTarget, status: 'na', score: null };
+    if (!course || course.mode === 'single' || isNum(course.posted) || course.done) return out;
+    var res = computeCourse(course, opts);
+    if (!(res.totalWeight > 0)) return out;
+    var mine = null, otherW = 0;
+    res.pendingSlots.forEach(function (sl) {
+      if (sl.item && sl.item.id === itemId) mine = sl; else otherW += sl.w;
+    });
+    if (!mine || !(mine.w > 0)) return out;
+    var expP = isNum(res.expectedPending) ? res.expectedPending : 0;
+    var minRaw = minRawFor(finalTarget, res.threshold) - adjustmentTotal(course.adjustments, false);
+    var x = (minRaw * res.totalWeight - res.earned - otherW * expP) / mine.w;
+    out.score = x;
+    out.weight = mine.w;
+    if (x <= EPS) out.status = 'secured';
+    else if (x > 10 + EPS) out.status = 'impossible';
+    else out.status = 'needed';
+    return out;
+  }
+
   function courseThreshold(course) { return normThreshold(course && course.rounding ? course.rounding.threshold : 5); }
 
   // ---------- the whole degree ----------
@@ -429,6 +453,7 @@
     hasAltWeights: hasAltWeights,
     computeCourse: computeCourse,
     neededForFinal: neededForFinal,
+    neededOnItem: neededOnItem,
     courseThreshold: courseThreshold,
     defaultAssumed: defaultAssumed,
     termAverage: termAverage,

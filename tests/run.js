@@ -76,6 +76,20 @@ test('needed: secured and impossible', function () {
 });
 
 console.log('Weighted courses');
+test('needed on one pending item, others at your average', function () {
+  // 60% graded at 9; two pending items of 20% each. Expected-case average = 9.
+  // For a 9 (8.5): 540 + 20*9 + 20*x >= 850 -> x >= 6.5. For a 10 (9.5): x >= 11.5 -> impossible.
+  var c = course([cat('a', 60, [item('x', 9)]), cat('b', 40, [item('p1', null), item('p2', null)])]);
+  var p1 = c.categories[1].items[0].id;
+  var n9 = G.neededOnItem(c, p1, 9);
+  eq(n9.status, 'needed'); near(n9.score, 6.5);
+  eq(G.neededOnItem(c, p1, 10).status, 'impossible');
+  near(G.neededOnItem(c, p1, 8).score, 1.5);
+  eq(G.neededOnItem(c, p1, 7).status, 'secured');
+  eq(G.neededOnItem(c, 'nope', 9).status, 'na');
+});
+
+
 test('grade so far is normalized by the graded weight', function () {
   var c = course([cat('hw', 30, [item('h1', 10), item('h2', 9)]), cat('ex', 50, [item('e1', 8)]), cat('fp', 20, [])]);
   var r = G.computeCourse(c);

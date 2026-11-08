@@ -436,6 +436,8 @@
       h += '<button class="btn btn-block whatif-open" data-act="open-whatif">' + icon('target') + 'What if…<small>Try grades and see your average</small></button>';
     }
 
+    h += comingUpHTML();
+
     // Tiers
     if (s.tiers.length) {
       h += '<section class="card card-flush"><div class="card-head"><h3>Goals</h3><button class="text-btn text-btn-sm" data-act="edit-tiers">Edit</button></div>';
@@ -474,17 +476,210 @@
       h += '<section class="card" style="margin-top:0">' + emptyHTML('book', 'Nothing in progress', 'Courses you’re taking now show up here with their expected final grades.', 'Add a course', 'quick-add') + '</section>';
     }
 
-    // By term
-    h += '<div class="section-label">By term</div><section class="card card-flush" style="margin-top:0">';
-    sortedTerms().forEach(function (t) {
-      var avg = G.termAverage(data, t.id);
-      var count = coursesOf(t.id).length;
-      h += '<button class="row" data-act="open-term" data-id="' + t.id + '"><span class="row-main"><span class="row-title">' + esc(termLabel(t)) + '</span>' +
-        '<span class="row-sub">' + esc(count ? plural(count, 'course') : 'No courses yet') + (avg.average != null && !avg.official ? ' · projected' : '') + '</span></span>' +
-        '<span class="row-end"><span class="score num">' + (avg.average != null ? G.fmtAvg(avg.average) : '–') + '</span>' + icon('chev', 'row-chev') + '</span></button>';
-    });
-    h += '</section><p class="hint">Term averages are for reference. Your cumulative counts every course equally.</p>';
     el.innerHTML = h;
+  }
+
+  // ================================================================
+  // Coming up: dated pending items, with what each one needs
+  // ================================================================
+
+  function pad2(n) { return n < 10 ? '0' + n : String(n); }
+  function dayDiff(key) {
+    var p = key.split('-');
+    var d = new Date(+p[0], +p[1] - 1, +p[2]);
+    var t = new Date(); t.setHours(0, 0, 0, 0);
+    return Math.round((d - t) / 86400000);
+  }
+  function relDay(key) {
+    var d = dayDiff(key);
+    if (d === 0) return 'Today';
+    if (d === 1) return 'Tomorrow';
+    if (d > 1 && d < 7) { var p = key.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString('en-US', { weekday: 'long' }); }
+    return formatDate(key) + (d > 0 && d <= 45 ? ' · in ' + d + ' days' : '');
+  }
+
+  function pendingItemsIn(filterFn) {
+    var out = [];
+    data.courses.forEach(function (c) {
+      if (c.mode !== 'weighted' || isFinal(c)) return;
+      c.categories.forEach(function (g) {
+        g.items.forEach(function (it) { if (it.status === 'pending' && filterFn(it)) out.push({ c: c, it: it, dd: it.date ? dayDiff(it.date) : null }); });
+      });
+    });
+    return out;
+  }
+
+  function upNeedHTML(c, it) {
+    var r = result(c);
+    var F = r.expectedFinal;
+    if (!isNum(F)) return '';
+    var opts = { assumed: assumed() };
+    var n = G.neededOnItem(c, it.id, F, opts);
+    var h = '';
+    if (n.status === 'secured') h += '<small class="up-safe">Your ' + F + ' is safe</small>';
+    else if (n.status === 'needed') h += '<b class="num">' + ceil2(n.score) + '</b><small>keeps your ' + F + '</small>';
+    if (F < 10) {
+      var up = G.neededOnItem(c, it.id, F + 1, opts);
+      if (up.status === 'needed') h += '<small>' + ceil2(up.score) + ' for ' + (F + 1 === 8 ? 'an ' : 'a ') + (F + 1) + '</small>';
+    }
+    return h ? '<span class="up-need">' + h + '</span>' : '';
+  }
+
+  function comingUpHTML() {
+    // Upcoming, plus anything that passed in the last two weeks without a grade.
+    var list = pendingItemsIn(function (it) { return it.date && dayDiff(it.date) >= -14; });
+    var undated = pendingItemsIn(function (it) { return !it.date; }).length;
+    if (!list.length && !undated) return '';
+    list.sort(function (a, b) { return a.dd - b.dd || a.it.name.localeCompare(b.it.name); });
+    var h = '<div class="section-label">Coming up</div><section class="card card-flush" style="margin-top:0">';
+    if (!list.length) {
+      h += '<p class="hint" style="padding:0.9rem 1rem;margin:0">Give your pending exams and projects a date (open the item, then Date) and the next ones show up here, with the grade each one needs.</p>';
+    } else {
+      var shown = ui.showAllUpcoming ? list : list.slice(0, 5);
+      shown.forEach(function (e) {
+        var when = e.dd < 0
+          ? '<span class="due-late">Was due ' + esc(formatDate(e.it.date)) + ' · enter the grade</span>'
+          : '<span' + (e.dd <= 1 ? ' class="due-soon"' : '') + '>' + esc(relDay(e.it.date)) + '</span>';
+        h += '<button class="row" data-act="open-course" data-id="' + e.c.id + '"><span class="row-main"><span class="row-title">' + esc(e.it.name) + '</span>' +
+          '<span class="row-sub up-sub"><span>' + esc(e.c.name) + '</span>' + when + '</span></span>' +
+          '<span class="row-end">' + upNeedHTML(e.c, e.it) + icon('chev', 'row-chev') + '</span></button>';
+      });
+      if (list.length > 5) h += '<button class="add-row" data-act="toggle-upcoming">' + (ui.showAllUpcoming ? 'Show fewer' : 'Show all ' + list.length) + '</button>';
+    }
+    h += '</section>';
+    if (list.length) h += '<p class="hint">Each grade assumes your other pending work comes in at your current average.</p>';
+    return h;
+  }
+
+  // ================================================================
+  // Progress charts
+  // ================================================================
+
+  function shortTermLabel(t) {
+    if (t.kind === 'summer') return 'Sum' + (t.year ? " '" + String(t.year).slice(-2) : '');
+    if (t.number) return 'S' + t.number;
+    return (t.label || 'Term').slice(0, 4);
+  }
+
+  // Cumulative average after each term, in term order. Once a term has courses
+  // still in progress, that point and every later one are projections.
+  function cumulativeSeries() {
+    var sum = 0, n = 0, projected = false, pts = [];
+    sortedTerms().forEach(function (t) {
+      var cs = coursesOf(t.id).filter(function (c) { return c.counts; });
+      if (!cs.length) return;
+      cs.forEach(function (c) {
+        var r = result(c);
+        var f = isFinal(c) ? r.final : r.expectedFinal;
+        if (!isNum(f)) f = G.roundFinal(assumed(), thr(c));
+        if (!isFinal(c) || r.estimate) projected = true;
+        sum += f; n++;
+      });
+      var tavg = G.termAverage(data, t.id);
+      pts.push({ label: shortTermLabel(t), full: termLabel(t), value: sum / n, projected: projected, termAvg: tavg.average, count: n });
+    });
+    return pts;
+  }
+
+  function lineChartHTML(pts) {
+    var W = 340, H = 200, L = 10, R = 84, T = 22, B = 30;
+    var tiers = data.settings.tiers.filter(function (t) { return isNum(t.target); });
+    var vals = pts.map(function (p) { return p.value; }).concat(tiers.map(function (t) { return t.target; }));
+    var lo = Math.floor((Math.min.apply(null, vals) - 0.15) * 10) / 10;
+    var hi = Math.min(10.05, Math.max.apply(null, vals) + 0.12);
+    var y = function (v) { return T + (hi - v) / (hi - lo) * (H - T - B); };
+    var x = function (i) { return pts.length === 1 ? L + (W - L - R) / 2 : L + 12 + i * (W - L - R - 24) / (pts.length - 1); };
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Cumulative average after each term">';
+    // Goal lines: recessive hairlines, labeled at the right.
+    var lastLabelY = -99;
+    tiers.slice().sort(function (a, b) { return b.target - a.target; }).forEach(function (t) {
+      var yy = y(t.target);
+      svg += '<line class="c-goal" x1="' + L + '" x2="' + (W - R + 4) + '" y1="' + yy + '" y2="' + yy + '" vector-effect="non-scaling-stroke"/>';
+      var ly = Math.max(yy + 3.5, lastLabelY + 12);
+      lastLabelY = ly;
+      var name = t.name.split(' ')[0].slice(0, 9);
+      svg += '<text class="c-goal-label" x="' + (W - R + 9) + '" y="' + ly + '">' + esc(G.fmtNum(t.target)) + ' ' + esc(name) + '</text>';
+    });
+    // The line: solid between finished terms, dashed into projected ones.
+    for (var i = 1; i < pts.length; i++) {
+      svg += '<line class="c-line' + (pts[i].projected ? ' is-proj' : '') + '" x1="' + x(i - 1) + '" y1="' + y(pts[i - 1].value) + '" x2="' + x(i) + '" y2="' + y(pts[i].value) + '" vector-effect="non-scaling-stroke"/>';
+    }
+    pts.forEach(function (p, i) {
+      var tip = 'After ' + p.full + ': ' + G.fmtAvg(p.value) + (p.projected ? ' (projected)' : '') + (isNum(p.termAvg) ? ' · term average ' + G.fmtAvg(p.termAvg) : '');
+      svg += '<text class="c-axis-label" x="' + x(i) + '" y="' + (H - 8) + '" text-anchor="middle">' + esc(p.label) + '</text>';
+      svg += '<circle class="c-dot' + (p.projected ? ' is-proj' : '') + '" cx="' + x(i) + '" cy="' + y(p.value) + '" r="5" vector-effect="non-scaling-stroke"/>';
+      svg += '<circle class="c-hit" cx="' + x(i) + '" cy="' + y(p.value) + '" r="18" data-tip="' + esc(tip) + '"/>';
+    });
+    var last = pts[pts.length - 1];
+    svg += '<text class="c-val" x="' + x(pts.length - 1) + '" y="' + (y(last.value) - 11) + '" text-anchor="middle">' + G.fmtAvg(last.value) + '</text>';
+    svg += '</svg>';
+    var table = '<table class="sr-only"><caption>Cumulative average after each term</caption><tr><th>Term</th><th>Cumulative</th><th>Term average</th></tr>' +
+      pts.map(function (p) { return '<tr><td>' + esc(p.full) + '</td><td>' + G.fmtAvg(p.value) + (p.projected ? ' (projected)' : '') + '</td><td>' + (isNum(p.termAvg) ? G.fmtAvg(p.termAvg) : '–') + '</td></tr>'; }).join('') + '</table>';
+    return '<div class="chart">' + svg + table + '</div>';
+  }
+
+  function gradeColumnsHTML() {
+    var buckets = [{ key: 10, label: '10', names: [] }, { key: 9, label: '9', names: [] }, { key: 8, label: '8', names: [] }, { key: 7, label: '7', names: [] }, { key: 6, label: '6 or less', names: [] }];
+    var total = 0;
+    data.courses.forEach(function (c) {
+      if (!c.counts || !isFinal(c)) return;
+      var f = result(c).final;
+      if (!isNum(f)) return;
+      var b = f >= 10 ? buckets[0] : f <= 6 ? buckets[4] : buckets[10 - f];
+      b.names.push(c.name); total++;
+    });
+    if (!total) return '';
+    var W = 340, H = 150, T = 24, B = 26, bw = 26;
+    var max = Math.max.apply(null, buckets.map(function (b) { return b.names.length; }));
+    var slot = W / buckets.length;
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="How many finished courses got each final grade">';
+    svg += '<line class="c-base" x1="0" x2="' + W + '" y1="' + (H - B) + '" y2="' + (H - B) + '" vector-effect="non-scaling-stroke"/>';
+    buckets.forEach(function (b, i) {
+      var cx = slot * i + slot / 2;
+      var n = b.names.length;
+      var hgt = n ? Math.max(6, n / max * (H - T - B)) : 0;
+      var x0 = cx - bw / 2, y0 = H - B - hgt, r = Math.min(4, hgt);
+      if (n) {
+        svg += '<path class="c-bar" d="M' + x0 + ',' + (H - B) + ' V' + (y0 + r) + ' Q' + x0 + ',' + y0 + ' ' + (x0 + r) + ',' + y0 + ' H' + (x0 + bw - r) + ' Q' + (x0 + bw) + ',' + y0 + ' ' + (x0 + bw) + ',' + (y0 + r) + ' V' + (H - B) + ' Z"/>';
+        svg += '<text class="c-val" x="' + cx + '" y="' + (y0 - 7) + '" text-anchor="middle">' + n + '</text>';
+        svg += '<rect class="c-hit" x="' + (cx - slot / 2 + 4) + '" y="' + T / 2 + '" width="' + (slot - 8) + '" height="' + (H - B - T / 2) + '" data-tip="' + esc(b.label + ': ' + b.names.join(', ')) + '"/>';
+      }
+      svg += '<text class="c-axis-label" x="' + cx + '" y="' + (H - 8) + '" text-anchor="middle">' + b.label + '</text>';
+    });
+    svg += '</svg>';
+    var table = '<table class="sr-only"><caption>Final grades of finished courses</caption><tr><th>Final</th><th>Courses</th></tr>' +
+      buckets.map(function (b) { return '<tr><td>' + b.label + '</td><td>' + b.names.length + (b.names.length ? ': ' + esc(b.names.join(', ')) : '') + '</td></tr>'; }).join('') + '</table>';
+    return '<section class="card"><div class="card-head"><h3>Your final grades</h3><span class="card-note">' + plural(total, 'finished course') + '</span></div><div class="chart">' + svg + table + '</div>' +
+      '<p class="hint">Tap a column to see which courses.</p></section>';
+  }
+
+  function progressHTML() {
+    var pts = cumulativeSeries();
+    if (!pts.length) return '';
+    var anyProj = pts.some(function (p) { return p.projected; });
+    var h = '<div class="section-label">Progress</div>';
+    h += '<section class="card" style="margin-top:0"><div class="card-head"><h3>Your average over time</h3><span class="card-note">after each term</span></div>' +
+      lineChartHTML(pts) + '<p class="hint">' + (anyProj ? 'Hollow dot and dashed line: includes courses still in progress. ' : '') + 'Gray lines are your goals. Tap a dot for details.</p></section>';
+    h += gradeColumnsHTML();
+    return h;
+  }
+
+  function showChartTip(target) {
+    var chart = target.closest('.chart');
+    var old = chart.querySelector('.chart-tip');
+    if (old && old._for === target) { old.remove(); return; }
+    if (old) old.remove();
+    var tip = document.createElement('div');
+    tip.className = 'chart-tip';
+    tip.textContent = target.getAttribute('data-tip');
+    tip._for = target;
+    chart.appendChild(tip);
+    var cr = chart.getBoundingClientRect(), tr = target.getBoundingClientRect();
+    var left = tr.left + tr.width / 2 - cr.left;
+    var half = tip.offsetWidth / 2;
+    left = Math.max(half, Math.min(cr.width - half, left));
+    tip.style.left = left + 'px';
+    tip.style.top = (tr.top - cr.top) + 'px';
   }
 
   // ================================================================
@@ -514,6 +709,7 @@
         '<span class="row-end"><span class="score num">' + (avg.average != null ? G.fmtAvg(avg.average) : '–') + '</span>' + icon('chev', 'row-chev') + '</span></button>';
     });
     h += '</section><p class="hint">Averages are the mean of rounded final grades, shown for reference only.</p>';
+    h += progressHTML();
     el.innerHTML = h;
   }
 
@@ -1714,6 +1910,7 @@
     back: function () { pop(false); },
     'open-term': function (el) { push('term', el.dataset.id); },
     'open-course': function (el) { push('course', el.dataset.id); },
+    'toggle-upcoming': function () { ui.showAllUpcoming = !ui.showAllUpcoming; renderTab('overview'); },
     'open-whatif': function () { startWhatIf(); push('whatif', 'sandbox'); },
     'wi-pick': function (el) {
       if (!ui.whatIf) return;
@@ -1806,6 +2003,9 @@
   };
 
   document.addEventListener('click', function (e) {
+    var tipTarget = e.target.closest('.chart [data-tip]');
+    document.querySelectorAll('.chart-tip').forEach(function (t) { if (!tipTarget || t.parentNode !== tipTarget.closest('.chart')) t.remove(); });
+    if (tipTarget) { showChartTip(tipTarget); return; }
     var seg = e.target.closest('.seg-opt');
     if (seg) {
       var group = seg.closest('.seg');
