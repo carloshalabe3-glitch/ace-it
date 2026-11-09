@@ -46,6 +46,7 @@
   --tabbar-h: 78px;
   --gutter: 1rem;
 
+  --sheet-solid: #FFFFFF;
   --glass: rgba(255, 255, 255, 0.5);
   --glass-strong: rgba(255, 255, 255, 0.78);
   --glass-blur: blur(22px) saturate(185%);
@@ -84,6 +85,7 @@
   --risk: #FF8A80;
   --risk-soft: #3E1716;
 
+  --sheet-solid: #1F191B;
   --glass: rgba(42, 35, 37, 0.55);
   --glass-strong: rgba(52, 44, 46, 0.78);
   --glass-shine: inset 0 1px 0 rgba(255, 255, 255, 0.14), inset 0 -1px 1px rgba(255, 255, 255, 0.04), inset 0 0 0 1px rgba(255, 255, 255, 0.07);
@@ -594,7 +596,7 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
 .sheet h2 { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.4rem; }
 .sheet-text { font-size: 0.92rem; color: var(--ink-soft); line-height: 1.55; margin-bottom: 1rem; }
 .sheet-body { margin-top: 0.8rem; }
-.sheet-actions { display: flex; gap: 0.6rem; margin-top: 1.2rem; position: sticky; bottom: calc(-1.25rem - env(safe-area-inset-bottom)); padding-bottom: 0; }
+.sheet-actions { display: flex; gap: 0.6rem; margin-top: 0.6rem; padding-top: 0.6rem; background: var(--sheet-solid); z-index: 2; position: sticky; bottom: calc(-1.25rem - env(safe-area-inset-bottom)); padding-bottom: 0; }
 .sheet-actions .btn { flex: 1; }
 .sheet .divider { height: 1px; background: var(--line); margin: 1.1rem 0; }
 .sheet-section { font-size: 0.78rem; font-weight: 650; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-mute); margin: 1.2rem 0 0.55rem; }
@@ -683,3 +685,14 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
 .chart-tip { position: absolute; z-index: 5; transform: translate(-50%, calc(-100% - 8px)); max-width: 260px; width: max-content; background: var(--ink); color: var(--bg); font-size: 0.78rem; font-weight: 500; line-height: 1.4; padding: 0.4rem 0.65rem; border-radius: 9px; box-shadow: 0 8px 20px -10px rgba(0, 0, 0, 0.5); pointer-events: none; animation: screenIn 160ms var(--ease-out); }
 :where([data-theme="dark"]) .chart-tip { background: #3A3234; color: var(--ink); }
 .up-sub { flex-direction: column; align-items: flex-start; gap: 0.05rem; }
+
+/* ================================================================
+   Course tabs and "More options"
+   ================================================================ */
+
+.course-tabs { margin-top: 1rem; }
+.more-toggle { display: flex; align-items: center; gap: 0.5rem; width: 100%; background: none; border: none; border-top: 1px solid var(--line); padding: 0.8rem 0; margin-bottom: 0.4rem; color: var(--accent); font-size: 0.95rem; font-weight: 550; text-align: left; }
+.more-toggle small { margin-left: auto; color: var(--ink-soft); font-size: 0.8rem; font-weight: 500; }
+.more-toggle .row-chev { transition: transform var(--t-fast); margin-left: 0; }
+.more-toggle span + .row-chev { margin-left: auto; }
+.more-toggle.is-open .row-chev { transform: rotate(90deg); }

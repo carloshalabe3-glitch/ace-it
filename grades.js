@@ -326,6 +326,19 @@
     return out;
   }
 
+  // Which "to get a ..." rows to show: the expected final, the one above it (or below,
+  // if it's already a 10), and the floor: what's already locked in, or the passing grade.
+  function neededTargets(res, passingGrade) {
+    var pass = Math.max(1, Math.ceil((isNum(passingGrade) ? passingGrade : 6) - EPS));
+    var E = isNum(res.expectedFinal) ? res.expectedFinal : (isNum(res.bestFinal) ? res.bestFinal : 10);
+    var floor = isNum(res.worstFinal) && res.worstFinal >= pass ? res.worstFinal : pass;
+    var seen = {}, out = [];
+    [E, E < 10 ? E + 1 : E - 1, floor].forEach(function (f) {
+      if (f > 0 && f <= 10 && !seen[f]) { seen[f] = true; out.push(f); }
+    });
+    return out.sort(function (a, b) { return b - a; });
+  }
+
   function courseThreshold(course) { return normThreshold(course && course.rounding ? course.rounding.threshold : 5); }
 
   // ---------- the whole degree ----------
@@ -454,6 +467,7 @@
     computeCourse: computeCourse,
     neededForFinal: neededForFinal,
     neededOnItem: neededOnItem,
+    neededTargets: neededTargets,
     courseThreshold: courseThreshold,
     defaultAssumed: defaultAssumed,
     termAverage: termAverage,

@@ -90,6 +90,23 @@
     return '<label class="switch"><input type="checkbox" data-sw="' + name + '"' + (on ? ' checked' : '') + (extra || '') + '><i></i></label>';
   }
 
+  // Explanations show for the first few app sessions they appear in, then go away for good.
+  // Within a session a tip stays put. `tab` keeps a tip on an unopened tab from using one up.
+  var TIP_SESSIONS = 3;
+  var tipsThisSession = {};
+  function tipHTML(key, text, tab) {
+    if (!tipsThisSession[key]) {
+      var counts = S.getPref('tips') || {};
+      if ((counts[key] || 0) >= TIP_SESSIONS) return '';
+      if (!tab || ui.tab === tab) {
+        tipsThisSession[key] = true;
+        counts[key] = (counts[key] || 0) + 1;
+        S.setPref('tips', counts);
+      }
+    }
+    return '<p class="hint">' + text + '</p>';
+  }
+
   function courseChips(c, r) {
     var out = [];
     if (isFinal(c)) out.push(chip('Final', 'good'));
@@ -430,7 +447,7 @@
       var parts = [];
       if (s.inProgress) parts.push(plural(s.inProgress, 'course') + ' in progress at expected finals');
       if (s.future) parts.push(plural(s.future, 'future course') + ' at ' + G.fmtNum(s.assumed) + ' (assumed)');
-      if (parts.length) h += '<p class="hint">Projected: ' + esc(parts.join(', ')) + '.</p>';
+      if (parts.length) h += tipHTML('projected', 'Projected: ' + esc(parts.join(', ')) + '.', 'overview');
     }
     if (s.inProgress > 0 || s.future > 0) {
       h += '<button class="btn btn-block whatif-open" data-act="open-whatif">' + icon('target') + 'What if…<small>Try grades and see your average</small></button>';
@@ -440,23 +457,19 @@
 
     // Tiers
     if (s.tiers.length) {
-      h += '<section class="card card-flush"><div class="card-head"><h3>Goals</h3><button class="text-btn text-btn-sm" data-act="edit-tiers">Edit</button></div>';
+      h += '<section class="card card-flush"><div class="card-head"><h3>Goals' + (s.remaining > 0 ? '<span class="cat-weight">' + plural(s.remaining, 'course') + ' left</span>' : '') + '</h3><button class="text-btn text-btn-sm" data-act="edit-tiers">Edit</button></div>';
       s.tiers.forEach(function (tier) {
         var st = TIER_STATUS[tier.status] || TIER_STATUS.out;
         var detail = '';
         if (tier.status === 'none') detail = 'Add courses to see where you stand.';
-        else if (tier.remaining === 0) detail = tier.status === 'secured' ? 'Every course is finished.' : 'Every course is finished below this goal.';
+        else if (tier.remaining === 0) detail = tier.status === 'secured' ? 'Every course is finished.' : 'Finished below this goal.';
+        else if (tier.neededAverage <= 0) detail = 'Held whatever happens.';
+        else if (tier.neededAverage > 10 + 1e-9) detail = 'Needs more than a 10 average.';
         else {
-          var R = tier.remaining;
-          var left = plural(R, 'course') + ' left';
-          if (tier.neededAverage <= 0) detail = 'Held whatever happens in the ' + left + '.';
-          else if (tier.neededAverage > 10 + 1e-9) detail = 'Would need more than a 10 average on the ' + left + '.';
-          else {
-            detail = 'Needs a <b class="num">' + ceil2(tier.neededAverage) + '</b> average on the ' + left + '.';
-            if (tier.ninesAffordable === R) detail += ' Every one could be a 9.';
-            else if (tier.ninesAffordable === 0) detail += ' Every one needs a 10.';
-            else if (tier.ninesAffordable != null) detail += ' Room for ' + (tier.ninesAffordable === 1 ? 'one 9' : tier.ninesAffordable + ' 9s') + ' if the rest are 10s.';
-          }
+          detail = 'Needs <b class="num">' + ceil2(tier.neededAverage) + '</b>';
+          if (tier.ninesAffordable === tier.remaining) detail += ' · all 9s would do';
+          else if (tier.ninesAffordable === 0) detail += ' · all 10s';
+          else if (tier.ninesAffordable != null) detail += ' · room for ' + (tier.ninesAffordable === 1 ? 'one 9' : tier.ninesAffordable + ' 9s');
         }
         h += '<div class="tier"><div class="tier-top"><span class="tier-name">' + esc(tier.name) + '<span class="num">' + G.fmtNum(tier.target) + '</span></span>' +
           '<span class="chip ' + (st.kind ? 'chip-' + st.kind : '') + '">' + st.label + '</span></div><div class="tier-detail">' + detail + '</div></div>';
@@ -464,14 +477,15 @@
       var note = s.totalCourses
         ? 'Out of ' + s.totalCourses + ' courses: ' + s.officialCount + ' finished, ' + s.inProgress + ' in progress, ' + s.future + ' still to take.'
         : 'Based on the ' + plural(s.denominator, 'course') + ' you’ve added. Set your degree’s total courses in Settings to plan the whole degree.';
-      h += '<p class="hint">' + esc(note) + '</p></section>';
+      h += tipHTML('goal-basis', esc(note), 'overview') + '</section>';
     }
 
     // In progress
     var current = data.courses.filter(function (c) { return !isFinal(c); });
     h += '<div class="section-label">In progress</div>';
     if (current.length) {
-      h += '<section class="card card-flush" style="margin-top:0">' + current.map(function (c) { return courseRowHTML(c, termLabel(termById(c.termId))); }).join('') + '</section>';
+      var severalTerms = current.some(function (c) { return c.termId !== current[0].termId; });
+      h += '<section class="card card-flush" style="margin-top:0">' + current.map(function (c) { return courseRowHTML(c, severalTerms ? termLabel(termById(c.termId)) : ''); }).join('') + '</section>';
     } else {
       h += '<section class="card" style="margin-top:0">' + emptyHTML('book', 'Nothing in progress', 'Courses you’re taking now show up here with their expected final grades.', 'Add a course', 'quick-add') + '</section>';
     }
@@ -547,7 +561,7 @@
       if (list.length > 5) h += '<button class="add-row" data-act="toggle-upcoming">' + (ui.showAllUpcoming ? 'Show fewer' : 'Show all ' + list.length) + '</button>';
     }
     h += '</section>';
-    if (list.length) h += '<p class="hint">Each grade assumes your other pending work comes in at your current average.</p>';
+    if (list.length) h += tipHTML('upcoming', 'Each grade assumes your other pending work comes in at your current average.', 'overview');
     return h;
   }
 
@@ -650,7 +664,7 @@
     var table = '<table class="sr-only"><caption>Final grades of finished courses</caption><tr><th>Final</th><th>Courses</th></tr>' +
       buckets.map(function (b) { return '<tr><td>' + b.label + '</td><td>' + b.names.length + (b.names.length ? ': ' + esc(b.names.join(', ')) : '') + '</td></tr>'; }).join('') + '</table>';
     return '<section class="card"><div class="card-head"><h3>Your final grades</h3><span class="card-note">' + plural(total, 'finished course') + '</span></div><div class="chart">' + svg + table + '</div>' +
-      '<p class="hint">Tap a column to see which courses.</p></section>';
+      tipHTML('chart-cols', 'Tap a column to see which courses.', 'terms') + '</section>';
   }
 
   function progressHTML() {
@@ -659,7 +673,7 @@
     var anyProj = pts.some(function (p) { return p.projected; });
     var h = '<div class="section-label">Progress</div>';
     h += '<section class="card" style="margin-top:0"><div class="card-head"><h3>Your average over time</h3><span class="card-note">after each term</span></div>' +
-      lineChartHTML(pts) + '<p class="hint">' + (anyProj ? 'Hollow dot and dashed line: includes courses still in progress. ' : '') + 'Gray lines are your goals. Tap a dot for details.</p></section>';
+      lineChartHTML(pts) + tipHTML('chart-line', (anyProj ? 'Hollow dot and dashed line: includes courses still in progress. ' : '') + 'Gray lines are your goals. Tap a dot for details.', 'terms') + '</section>';
     h += gradeColumnsHTML();
     return h;
   }
@@ -708,7 +722,7 @@
         '<span class="row-sub">' + sub.join(' · ') + chips + '</span></span>' +
         '<span class="row-end"><span class="score num">' + (avg.average != null ? G.fmtAvg(avg.average) : '–') + '</span>' + icon('chev', 'row-chev') + '</span></button>';
     });
-    h += '</section><p class="hint">Averages are the mean of rounded final grades, shown for reference only.</p>';
+    h += '</section>' + tipHTML('terms-avg', 'Averages are the mean of rounded final grades, shown for reference only.', 'terms');
     h += progressHTML();
     el.innerHTML = h;
   }
@@ -766,7 +780,7 @@
     }
 
     if (c.mode === 'single') h += singleCardHTML(c, r, t);
-    else h += weightedHTML(c, r, t);
+    else h += weightedHTML(c, r, t, el._courseTab || 'grades');
 
     // Adjustments on the whole course
     if (c.adjustments.length) {
@@ -778,9 +792,6 @@
 
     // Course options
     h += '<div class="section-label">Course</div><section class="card card-flush" style="margin-top:0">' +
-      '<div class="toggle-row"><span class="row-main">Rounding rule</span><span style="width:150px">' + segHTML('course-rule', [{ val: 5, label: '.5' }, { val: 6, label: '.6' }], t) + '</span></div>' +
-      '<div class="toggle-row"><span class="row-main">Rule unconfirmed</span>' + switchHTML('course-rule-unconfirmed', c.rounding.unconfirmed) + '</div>' +
-      '<div class="toggle-row"><span class="row-main">Counts toward average</span>' + switchHTML('course-counts', c.counts) + '</div>' +
       '<div class="toggle-row"><span class="row-main">Finished</span>' + switchHTML('course-done', c.done) + '</div>' +
       '<button class="settings-row" data-act="edit-posted"><span class="row-main"><b>Official final grade</b><small>' + (isNum(c.posted) ? 'Posted: ' + G.fmtNum(c.posted, 4) + ' (overrides the calculation)' : 'Optional. Enter it once the school posts it.') + '</small></span>' + icon('chev', 'row-chev') + '</button>' +
       (c.adjustments.length ? '' : '<button class="settings-row" data-act="edit-adjustments"><span class="row-main"><b>Add a course adjustment</b><small>Points added to or taken off the whole course</small></span>' + icon('chev', 'row-chev') + '</button>') +
@@ -807,12 +818,12 @@
         ? pairHTML(r.worst, t, 'is-muted') + '<span class="proj-note" style="display:inline"> to </span>' + pairHTML(r.best, t, 'is-muted')
         : '<span class="row-value">Not set</span>';
       h += '<div class="proj"><div class="proj-label">Range</div><div class="proj-val" style="font-size:1rem">' + range + '</div></div></div>';
-      h += '<p class="hint">This professor grades at the end, so it counts in your cumulative as an estimate until you enter the official grade.</p>';
+      h += tipHTML('single-est', 'This professor grades at the end, so it counts in your cumulative as an estimate until you enter the official grade.');
     }
     return h + '</section>';
   }
 
-  function weightedHTML(c, r, t) {
+  function weightedHTML(c, r, t, tab) {
     var h = '';
     if (!c.categories.length) {
       return '<section class="card">' + emptyHTML('target', 'Set up how this course is graded', 'Add categories and their weights, like “Exams 60 / Homework 40”. Items go under each one.', 'Add categories', 'edit-categories') + '</section>';
@@ -861,11 +872,7 @@
 
     // Needed grades
     if (!isFinal(c) && r.pendingWeight > 0) {
-      var passingFinal = Math.max(1, Math.ceil(data.settings.passingGrade - 1e-9));
-      var hi = Math.min(10, (isNum(r.bestFinal) ? r.bestFinal : 10) + 1);
-      var lo = Math.max(passingFinal, isNum(r.worstFinal) ? r.worstFinal : 0);
-      var targets = [];
-      for (var F = hi; F >= lo && targets.length < 5; F--) targets.push(F);
+      var targets = G.neededTargets(r, data.settings.passingGrade);
       var pendNames = r.pendingSlots.map(function (sl) { return (sl.item ? sl.item.name : sl.cat.name) + ' (' + fmtW(sl.w) + ')'; });
       var onePending = r.pendingSlots.length === 1;
       var onWhat = onePending ? 'on ' + (r.pendingSlots[0].item ? r.pendingSlots[0].item.name : r.pendingSlots[0].cat.name) : 'average on what’s left';
@@ -881,6 +888,9 @@
       h += '<p class="hint">' + (onePending ? 'Left to grade: ' : 'Left to grade (the same average on each): ') + esc(pendNames.join(', ')) + '.' +
         (G.hasPendingAdjustments(c.adjustments) || r.withOwed != null ? ' Owed points aren’t counted until you switch them on.' : '') + '</p></section>';
     }
+
+    var forecast = h;
+    h = '';
 
     // Categories and items
     r.categoryStats.forEach(function (cs) {
@@ -909,7 +919,9 @@
       h += '<button class="add-row" data-act="add-item" data-cat="' + g.id + '"><svg><use href="#sym-plus"/></svg>Add to ' + esc(g.name) + '</button></section>';
     });
     h += '<div class="btn-row"><button class="btn" data-act="edit-categories">Edit categories and weights</button></div>';
-    return h;
+    return '<div class="course-tabs">' + segHTML('course-tab', [{ val: 'grades', label: 'Grades' }, { val: 'forecast', label: 'Forecast' }], tab) + '</div>' +
+      '<div class="course-pane' + (tab === 'grades' ? '' : ' hidden') + '" data-pane="grades">' + h + '</div>' +
+      '<div class="course-pane' + (tab === 'forecast' ? '' : ' hidden') + '" data-pane="forecast">' + forecast + '</div>';
   }
 
   function formatDate(key) {
@@ -1031,7 +1043,7 @@
             return '<button class="wi-pick' + (v === pick ? ' is-on' : '') + (v === now ? ' is-now' : '') + '" data-act="wi-pick" data-id="' + c.id + '" data-val="' + v + '" role="radio" aria-checked="' + (v === pick) + '">' + v + '</button>';
           }).join('') + '</div></div>';
       });
-      h += '</section><p class="hint">The dot marks each course’s expected final right now.</p>';
+      h += '</section>' + tipHTML('whatif-dot', 'The dot marks each course’s expected final right now.');
     } else {
       h += '<section class="card">' + emptyHTML('book', 'Nothing in progress', 'Add this semester’s courses first, then come back to try grades.', '', '') + '</section>';
     }
@@ -1118,6 +1130,16 @@
   function q(bd, sel) { return bd.querySelector(sel); }
   function val(bd, sel) { var n = q(bd, sel); return n ? n.value : ''; }
   function setErr(bd, msg) { var n = q(bd, '.field-error[data-main]'); if (n) n.textContent = msg || ''; }
+
+  // "More options" row that reveals the rarely-changed fields of a form.
+  function moreToggleHTML(act, noteId, open) {
+    return '<button type="button" class="more-toggle' + (open ? ' is-open' : '') + '" data-act="' + act + '"><span>More options</span>' +
+      (noteId ? '<small id="' + noteId + '"></small>' : '') + icon('chev', 'row-chev') + '</button>';
+  }
+  function toggleMore(btn, panel) {
+    panel.classList.toggle('hidden');
+    btn.classList.toggle('is-open', !panel.classList.contains('hidden'));
+  }
 
   function confirmSheet(title, text, okLabel, onOk, danger) {
     openSheet('<h2>' + esc(title) + '</h2><p class="sheet-text">' + esc(text) + '</p><div class="sheet-actions"><button class="btn" data-act="cancel">Cancel</button><button class="btn ' + (danger === false ? 'btn-primary' : 'btn-danger') + '" data-act="ok">' + esc(okLabel) + '</button></div>', function (bd) {
@@ -1243,9 +1265,6 @@
       (isNew ? '<div class="field-inline"><span>Already finished<small style="display:block;color:var(--ink-soft);font-size:.8rem">You have the final grade</small></span>' + switchHTML('c-finished', finished) + '</div>' +
         '<div class="field" id="finishedFields"><label for="cFinal">Final grade</label><input type="text" inputmode="decimal" id="cFinal" autocomplete="off" placeholder="10, or 9.47 if it has decimals">' +
         '<p class="field-hint" id="finalHint">As the school posted it. Counts toward your official average.</p></div>' : '') +
-      '<div class="field"><span class="field-label">Rounding rule</span>' + segHTML('c-rule', [{ val: 5, label: 'From .5' }, { val: 6, label: 'From .6' }], threshold) +
-      '<p class="field-hint" id="ruleHint"></p></div>' +
-      '<div class="field-inline"><span>Rule unconfirmed</span>' + switchHTML('c-rule-unc', c.rounding.unconfirmed) + '</div>' +
       '<div id="planFields"><div class="field"><span class="field-label">How it’s graded</span>' + segHTML('c-mode', [{ val: 'weighted', label: 'Weighted' }, { val: 'single', label: 'Single grade' }], mode) + '</div>' +
       '<div id="weightedFields">' + (isNew ?
         '<div class="field"><span class="field-label">Categories and weights</span>' +
@@ -1260,7 +1279,12 @@
       '<div class="field-trio"><div class="field"><label for="sExp">Expected</label><input type="text" inputmode="decimal" id="sExp" value="' + (isNum(s.expected) ? s.expected : '') + '" placeholder="9"></div>' +
       '<div class="field"><label for="sLow">Low <span class="opt">opt.</span></label><input type="text" inputmode="decimal" id="sLow" value="' + (isNum(s.low) ? s.low : '') + '"></div>' +
       '<div class="field"><label for="sHigh">High <span class="opt">opt.</span></label><input type="text" inputmode="decimal" id="sHigh" value="' + (isNum(s.high) ? s.high : '') + '"></div></div></div></div>' +
-      '<div class="field-inline"><span>Counts toward average</span>' + switchHTML('c-counts', c.counts) + '</div>' +
+      (isNew ? moreToggleHTML('c-more', 'cMoreNote') : '') +
+      '<div id="cMore"' + (isNew ? ' class="hidden"' : '') + '>' +
+      '<div class="field"><span class="field-label">Rounding rule</span>' + segHTML('c-rule', [{ val: 5, label: 'From .5' }, { val: 6, label: 'From .6' }], threshold) +
+      '<p class="field-hint" id="ruleHint"></p></div>' +
+      '<div class="field-inline"><span>Rule unconfirmed</span>' + switchHTML('c-rule-unc', c.rounding.unconfirmed) + '</div>' +
+      '<div class="field-inline"><span>Counts toward average</span>' + switchHTML('c-counts', c.counts) + '</div></div>' +
       '<div class="field-error" data-main></div>' +
       '<div class="sheet-actions"><button class="btn" data-act="cancel" id="cCancel">Cancel</button>' + (isNew ? '<button class="btn" data-act="save-another" id="cAnother">Add another</button>' : '') +
       '<button class="btn btn-primary" data-act="save">' + (isNew ? 'Add course' : 'Save') + '</button></div>';
@@ -1280,8 +1304,10 @@
         if (q(bd, '#finishedFields')) q(bd, '#finishedFields').classList.toggle('hidden', !finished);
         if (q(bd, '#cAnother')) { q(bd, '#cAnother').classList.toggle('hidden', !finished); q(bd, '#cCancel').classList.toggle('hidden', finished); }
         q(bd, '#ruleHint').textContent = threshold === 6 ? '8.6 becomes 9, and 8.5 stays 8.' : '8.5 becomes 9, and 9.49 stays 9.';
+        if (q(bd, '#cMoreNote')) q(bd, '#cMoreNote').textContent = ruleText(threshold);
         finalHint();
       }
+      bd._acts['c-more'] = function (btn) { toggleMore(btn, q(bd, '#cMore')); };
       bd._segs['c-rule'] = function (v) { threshold = +v; sync(); };
       bd._segs['c-mode'] = function (v) { mode = v; sync(); };
       bd._sws['c-finished'] = function (on) { finished = on; sync(); if (on) q(bd, '#cFinal').focus(); };
@@ -1538,15 +1564,18 @@
     var adj = it.adjustments.map(function (a) { return { id: a.id, label: a.label, points: a.points, confirmed: a.confirmed }; });
     var scoreText = isNum(it.points) && isNum(it.max) ? G.fmtNum(it.points, 4) + '/' + G.fmtNum(it.max, 4) : (isNum(it.score) ? G.fmtNum(it.score, 4) : '');
     var share = shareHint(c, cat, isNew);
+    var moreOpen = isNum(it.weight) || it.adjustments.length > 0;
     var html = '<h2>' + (isNew ? 'New item' : 'Edit item') + '</h2>' +
       '<div class="field"><label for="iName">Name</label><input type="text" id="iName" maxlength="60" autocomplete="off" placeholder="' + esc(suggestName(cat)) + '" value="' + esc(it.name) + '"></div>' +
       (c.categories.length > 1 ? '<div class="field"><label for="iCat">Category</label><select id="iCat">' + c.categories.map(function (g) { return '<option value="' + g.id + '"' + (g.id === cat.id ? ' selected' : '') + '>' + esc(g.name) + ' (' + G.fmtNum(g.weight) + '%)</option>'; }).join('') + '</select></div>' : '') +
       '<div class="field">' + segHTML('i-status', [{ val: 'graded', label: 'Graded' }, { val: 'pending', label: 'Pending' }], status) + '</div>' +
       '<div class="field" id="scoreField"><label for="iScore">Grade</label><input type="text" id="iScore" inputmode="decimal" autocomplete="off" placeholder="8.9 or 17/20" value="' + esc(scoreText) + '"><p class="field-hint" id="scoreHint">Out of 10, or as points like 17/20.</p></div>' +
-      '<div class="field-pair"><div class="field"><label for="iDate">Date <span class="opt">optional</span></label><input type="date" id="iDate" value="' + (it.date || '') + '"></div>' +
-      '<div class="field"><label for="iWeight">Weight % <span class="opt">optional</span></label><input type="text" id="iWeight" inputmode="decimal" placeholder="' + esc(share) + '" value="' + (isNum(it.weight) ? it.weight : '') + '"></div></div>' +
-      '<p class="field-hint" style="margin-top:-0.6rem;margin-bottom:0.8rem">Leave weight empty to split the category equally. A custom weight is a % of the whole course, like 30 for an exam worth 30%.</p>' +
-      '<div class="sheet-section">Bonus points and adjustments</div>' + adjEditorHTML(adj) +
+      '<div class="field"><label for="iDate">Date <span class="opt">optional</span></label><input type="date" id="iDate" value="' + (it.date || '') + '"></div>' +
+      moreToggleHTML('i-more', '', moreOpen) +
+      '<div id="iMore"' + (moreOpen ? '' : ' class="hidden"') + '>' +
+      '<div class="field"><label for="iWeight">Custom weight % <span class="opt">optional</span></label><input type="text" id="iWeight" inputmode="decimal" placeholder="' + esc(share) + '" value="' + (isNum(it.weight) ? it.weight : '') + '">' +
+      '<p class="field-hint">Leave empty to split the category equally. A custom weight is a % of the whole course, like 30 for an exam worth 30%.</p></div>' +
+      '<div class="sheet-section">Bonus points and adjustments</div>' + adjEditorHTML(adj) + '</div>' +
       '<div class="field-error" data-main></div>' +
       '<div class="sheet-actions">' + (isNew ? '<button class="btn" data-act="save-another">Add another</button>' : '<button class="btn" data-act="cancel">Cancel</button>') +
       '<button class="btn btn-primary" data-act="save">' + (isNew ? 'Add' : 'Save') + '</button></div>' +
@@ -1561,6 +1590,7 @@
         if (p && isNum(p.max)) hint.textContent = 'That’s ' + G.fmtNum(p.score, 4) + ' out of 10.';
         else hint.textContent = 'Out of 10, or as points like 17/20.';
       }
+      bd._acts['i-more'] = function (btn) { toggleMore(btn, q(bd, '#iMore')); };
       bd._segs['i-status'] = function (v) { status = v; sync(); };
       q(bd, '#iScore').addEventListener('input', preview);
       sync(); preview();
@@ -1989,11 +2019,13 @@
   var SEGS = {
     theme: function (v) { setThemePref(v); },
     'default-rule': function (v) { data.settings.defaultThreshold = +v; persist(); },
-    'course-rule': function (v) { var c = currentCourse(); if (c) { c.rounding.threshold = +v; commit(); } }
+    'course-tab': function (v, group) {
+      var screen = group.closest('.screen');
+      screen._courseTab = v;
+      screen.querySelectorAll('.course-pane').forEach(function (p) { p.classList.toggle('hidden', p.dataset.pane !== v); });
+    }
   };
   var SWITCHES = {
-    'course-rule-unconfirmed': function (on) { var c = currentCourse(); if (c) { c.rounding.unconfirmed = on; commit(); } },
-    'course-counts': function (on) { var c = currentCourse(); if (c) { c.counts = on; commit(); } },
     'course-done': function (on) {
       var c = currentCourse(); if (!c) return;
       c.done = on;

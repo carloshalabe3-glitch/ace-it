@@ -76,6 +76,14 @@ test('needed: secured and impossible', function () {
 });
 
 console.log('Weighted courses');
+test('needed rows: expected, one next to it, and the floor', function () {
+  var list = function (e, b, w, p) { return G.neededTargets({ expectedFinal: e, bestFinal: b, worstFinal: w }, p == null ? 6 : p).join(','); };
+  eq(list(10, 10, 8), '10,9,8');      // already a 10: show the one below instead
+  eq(list(9, 10, 3), '10,9,6');       // nothing locked in yet: floor is passing
+  eq(list(9, 10, 9), '10,9');         // floor is the expected grade: no repeat
+  eq(list(null, 10, 0), '10,9,6');    // no expected grade yet
+});
+
 test('needed on one pending item, others at your average', function () {
   // 60% graded at 9; two pending items of 20% each. Expected-case average = 9.
   // For a 9 (8.5): 540 + 20*9 + 20*x >= 850 -> x >= 6.5. For a 10 (9.5): x >= 11.5 -> impossible.
