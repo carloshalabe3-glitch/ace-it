@@ -57,6 +57,23 @@ test('display: two decimals, never a misleading one', function () {
   eq(G.fmtAvg(null), '–');
 });
 
+test('display: a grade in whole hundredths shows as itself and agrees with its rounding', function () {
+  // Counting numbers step through hundredths, so every step must be safe to show.
+  [5, 6].forEach(function (t) {
+    for (var i = 0; i <= 1000; i++) {
+      var q = i / 100;
+      eq(G.fmtRaw(q, t), q.toFixed(2), 'fmtRaw ' + q);
+      eq(G.roundFinal(parseFloat(G.fmtRaw(q, t)), t), G.roundFinal(q, t), 'rounding ' + q);
+    }
+  });
+});
+test('display: an average on its way between two values is never shown above itself', function () {
+  for (var i = 0; i <= 400; i++) {
+    var x = 9 + i / 400 + 1 / 3000;
+    if (parseFloat(G.fmtAvg(x)) > x + 1e-9) throw new Error('fmtAvg rounded ' + x + ' up to ' + G.fmtAvg(x));
+  }
+});
+
 console.log('Needed grade');
 test('minimum raw for a 9: 8.50 under .5, 8.60 under .6; a 10 needs 9.5 / 9.6', function () {
   eq(G.minRawFor(9, 5), 8.5); eq(G.minRawFor(9, 6), 8.6); eq(G.minRawFor(10, 5), 9.5); eq(G.minRawFor(10, 6), 9.6);

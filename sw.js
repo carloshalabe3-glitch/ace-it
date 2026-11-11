@@ -1,4 +1,4 @@
-var CACHE_NAME = 'ace-it-v7';
+var CACHE_NAME = 'ace-it-v8';
 var ASSETS = [
   './',
   './index.html',

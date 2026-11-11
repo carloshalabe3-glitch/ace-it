@@ -35,12 +35,21 @@
   --r-l: 20px;
 
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* One family of springs. Bouncy for things that land, smooth for things that travel,
+     snappy for things that must not overshoot. Real spring curves where the browser has
+     linear(), close cubic-beziers elsewhere. */
+  --spring-bouncy: cubic-bezier(0.3, 1.45, 0.45, 1);
+  --spring-smooth: cubic-bezier(0.22, 1.12, 0.36, 1);
+  --spring-snappy: cubic-bezier(0.2, 0.9, 0.25, 1);
+  --t-bouncy: 600ms;
+  --t-smooth: 520ms;
+  --t-snappy: 420ms;
+  --ease-spring: var(--spring-bouncy);
   --t-fast: 160ms;
   --t-med: 260ms;
   --t-slow: 420ms;
   --press-in: 90ms;
-  --spring-out: 520ms cubic-bezier(0.22, 1.6, 0.36, 1);
+  --spring-out: var(--t-bouncy) var(--spring-bouncy);
 
   --sans: -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', Roboto, sans-serif;
   --tabbar-h: 78px;
@@ -49,6 +58,9 @@
   --sheet-solid: #FFFFFF;
   --glass: rgba(255, 255, 255, 0.5);
   --glass-strong: rgba(255, 255, 255, 0.78);
+  --glass-seg: rgba(232, 225, 225, 0.62);
+  --glass-thumb: rgba(255, 255, 255, 0.92);
+  --glass-sheet: rgba(255, 255, 255, 0.9);
   --glass-blur: blur(22px) saturate(185%);
   --glass-shine: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 -1px 1px rgba(255, 255, 255, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.4);
   --glass-drop: 0 10px 30px -12px rgba(26, 20, 20, 0.28), 0 2px 6px -2px rgba(26, 20, 20, 0.08);
@@ -88,9 +100,20 @@
   --sheet-solid: #1F191B;
   --glass: rgba(42, 35, 37, 0.55);
   --glass-strong: rgba(52, 44, 46, 0.78);
+  --glass-seg: rgba(46, 38, 40, 0.62);
+  --glass-thumb: rgba(255, 255, 255, 0.15);
+  --glass-sheet: rgba(31, 25, 27, 0.9);
   --glass-shine: inset 0 1px 0 rgba(255, 255, 255, 0.14), inset 0 -1px 1px rgba(255, 255, 255, 0.04), inset 0 0 0 1px rgba(255, 255, 255, 0.07);
   --glass-drop: 0 10px 30px -12px rgba(0, 0, 0, 0.7), 0 2px 6px -2px rgba(0, 0, 0, 0.4);
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 10px 28px -16px rgba(0, 0, 0, 0.7);
+}
+
+@supports (transition-timing-function: linear(0, 1)) {
+  :root {
+    --spring-bouncy: linear(0, 0.049, 0.17, 0.331, 0.504, 0.67, 0.815, 0.933, 1.02, 1.079, 1.113, 1.126, 1.123, 1.11, 1.091, 1.069, 1.047, 1.028, 1.012, 1, 0.992, 0.987, 0.984, 0.984, 0.986, 0.988, 0.991, 0.993, 0.996, 0.998, 1);
+    --spring-smooth: linear(0, 0.03, 0.105, 0.205, 0.315, 0.426, 0.532, 0.627, 0.711, 0.782, 0.841, 0.889, 0.926, 0.955, 0.976, 0.992, 1.002, 1.009, 1.013, 1.015, 1.015, 1.015, 1.013, 1.012, 1.01, 1.008, 1);
+    --spring-snappy: linear(0, 0.055, 0.173, 0.31, 0.442, 0.559, 0.657, 0.737, 0.801, 0.85, 0.888, 0.917, 0.939, 0.955, 0.967, 0.976, 0.983, 0.987, 0.991, 0.993, 1);
+  }
 }
 
 /* ================================================================
@@ -162,32 +185,52 @@ svg { display: block; }
   margin: 0 auto;
   padding: 0 var(--gutter) 1.5rem;
 }
-.screen.is-active { display: flex; animation: screenIn var(--t-med) var(--ease-out) backwards; }
-.screen.is-active.anim-push { animation: screenPush 420ms cubic-bezier(0.2, 0.9, 0.25, 1) backwards; }
-.screen.is-active.anim-pop { animation: screenPop 380ms cubic-bezier(0.2, 0.9, 0.25, 1) backwards; }
-.app.instant .screen { animation: none !important; }
-.screen.is-dragging, .screen.is-settling, .screen.is-leaving { animation: none; position: relative; z-index: 1; background: var(--bg); box-shadow: -14px 0 32px -12px rgba(0, 0, 0, 0.3); will-change: transform; }
-.screen.is-settling, .screen.is-leaving { transition: transform 260ms cubic-bezier(0.2, 0.9, 0.25, 1); }
-.screen.is-under {
+.screen.is-active { display: flex; }
+
+/* Entrances are opt-in: .entering goes on when a tab is opened and comes off while a
+   screen opens or closes, so nothing replays behind it. The new tab slides in from the
+   side you're heading to (--dir) and its cards rise one after another. */
+.app.entering .screen.is-active { animation: tabIn var(--t-snappy) var(--spring-snappy) backwards; }
+.app.entering .screen.is-active > :not(.topbar) { animation: riseIn var(--t-smooth) var(--spring-smooth) backwards; animation-delay: calc(var(--i, 7) * 28ms); }
+.screen > :nth-child(2) { --i: 0; }
+.screen > :nth-child(3) { --i: 1; }
+.screen > :nth-child(4) { --i: 2; }
+.screen > :nth-child(5) { --i: 3; }
+.screen > :nth-child(6) { --i: 4; }
+.screen > :nth-child(7) { --i: 5; }
+.screen > :nth-child(8) { --i: 6; }
+
+/* A course or term opening from its row, or closing back into it (startMorph in app.js).
+   The screen floats above the page, scaled and clipped to the row's shape; the row's own
+   face rides on top and fades away. */
+.screen.is-morph {
   display: flex;
   position: fixed;
-  inset: 0;
-  z-index: 0;
+  left: 0; right: 0; top: 0;
+  z-index: 42;
   overflow: hidden;
+  background: var(--bg);
+  transform-origin: 0 0;
+  will-change: transform, clip-path;
   pointer-events: none;
   padding-top: env(safe-area-inset-top);
-  background: var(--bg);
-  margin: 0 auto;
+  transition: background-color 160ms;
 }
-.screen.is-under::after { content: ''; position: absolute; inset: 0; background: #000; opacity: var(--shade, 0); pointer-events: none; }
-.screen.is-under.is-settling, .screen.is-under.is-leaving { transition: transform 260ms cubic-bezier(0.2, 0.9, 0.25, 1); }
+.screen.is-morph.is-landing { background: var(--surface); }
+.screen.is-morph > * { flex-shrink: 0; }
+/* A sticky bar inside a padded scroller sticks at the padding's inner edge: pull it back up under the status bar. */
+.screen.is-morph > .topbar { top: calc(-1 * env(safe-area-inset-top)); }
+.screen.is-morph > :not(.morph-clone) { opacity: var(--mo, 1); }
+.app.is-morphing .screen.is-active { will-change: transform; }
+/* Frosted bars can't blur what's behind them while their screen is moving; go solid for the ride. */
+.app.is-morphing .topbar.is-compact { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
+.morph-clone { position: absolute; left: 0; top: 0; z-index: 40; overflow: hidden; transform-origin: 0 0; background: var(--surface); pointer-events: none; will-change: opacity; }
+.morph-clone > * { width: 100%; height: 100%; margin: 0; border-top-color: transparent; }
+.morph-scrim { position: fixed; inset: 0; z-index: 41; background: #000; opacity: 0; pointer-events: none; will-change: opacity; }
 
 @keyframes screenIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-@keyframes screenPush { from { transform: translateX(100%); } to { transform: none; } }
-@keyframes screenPop { from { transform: translateX(-28%); opacity: 0.6; } to { transform: none; opacity: 1; } }
-@media (prefers-reduced-motion: reduce) {
-  .screen.is-active, .screen.is-active.anim-push, .screen.is-active.anim-pop { animation: none; }
-}
+@keyframes tabIn { from { opacity: 0; transform: translateX(calc(var(--dir, 0) * 22px)); } }
+@keyframes riseIn { from { opacity: 0; transform: translateY(10px); } }
 
 /* ================================================================
    Top bars
@@ -214,17 +257,26 @@ svg { display: block; }
 }
 .topbar h1 { font-size: 2.05rem; font-weight: 700; letter-spacing: -0.025em; line-height: 1.1; }
 .brand { display: flex; align-items: center; gap: 0.55rem; min-width: 0; }
-.brand-mark { width: 30px; height: 30px; color: var(--accent); fill: none; stroke: currentColor; stroke-width: 4.5; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
-.brand-mark .mark-star { fill: currentColor; stroke-width: 1; }
+.brand-mark { width: 30px; height: 30px; color: var(--accent); fill: none; stroke: currentColor; stroke-width: 4.5; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; overflow: visible; }
+.bm-star { fill: currentColor; stroke-width: 1.4; transform-box: fill-box; transform-origin: center; }
+/* The mark draws itself on launch: the check first, then the star lands. --since keeps it
+   in step when the header is redrawn mid-way. The star turns again when your average rises. */
+.brand-draw .bm-check { stroke-dasharray: 36; }
+.brand-draw.is-intro .bm-check { animation: bmDraw 480ms var(--ease-out) backwards; animation-delay: calc(160ms - var(--since, 0ms)); }
+.brand-draw.is-intro .bm-star { animation: bmStar 760ms var(--spring-bouncy) backwards; animation-delay: calc(500ms - var(--since, 0ms)); }
+.brand-draw.is-twinkle .bm-star { animation: bmTwinkle 900ms var(--spring-smooth); }
+@keyframes bmDraw { from { stroke-dashoffset: 36; } }
+@keyframes bmStar { from { transform: scale(0) rotate(-135deg); opacity: 0; } }
+@keyframes bmTwinkle { 0% { transform: none; } 40% { transform: scale(1.6) rotate(90deg); } 100% { transform: rotate(90deg); } }
 
 .topbar-sub { padding-top: calc(env(safe-area-inset-top) + 0.5rem); padding-bottom: 0.5rem; min-height: calc(52px + env(safe-area-inset-top)); }
-.topbar-sub .topbar-title { position: absolute; left: 50%; transform: translateX(-50%); max-width: 44%; font-weight: 600; font-size: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: opacity 200ms; bottom: 0.85rem; }
+.topbar-sub .topbar-title { position: absolute; left: 50%; transform: translateX(-50%); max-width: 38%; font-weight: 600; font-size: 1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 0; transition: opacity 200ms; bottom: 0.85rem; }
 .topbar-sub.is-compact .topbar-title { opacity: 1; }
 
 .back-btn {
   display: inline-flex; align-items: center; gap: 0.1rem;
   background: none; border: none; padding: 0.4rem 0.4rem 0.4rem 0; margin-left: -0.35rem;
-  color: var(--accent); font-size: 1.02rem; font-weight: 500; max-width: 27%;
+  color: var(--accent); font-size: 1.02rem; font-weight: 500; max-width: 30%;
 }
 .back-btn svg { width: 24px; height: 24px; flex-shrink: 0; stroke-width: 2.4; }
 .back-btn span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -296,17 +348,21 @@ button.row:active { background: var(--surface-2); }
 .chip-line { background: none; box-shadow: inset 0 0 0 1px var(--line-strong); }
 .chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.6rem; }
 
-/* "9.47 -> 9": raw grade beside the rounded final, everywhere */
-.pair { display: inline-flex; align-items: baseline; gap: 0.3rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* "9.47 → 10": the raw grade, then the rounded final it becomes, in its own tile.
+   Filled once the grade is final, tinted while it's still expected. */
+.pair { display: inline-flex; align-items: baseline; gap: 0.4em; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .pair .raw { color: var(--ink-soft); }
-.pair .arrow { color: var(--ink-mute); font-size: 0.85em; }
-.pair .fin { font-weight: 700; color: var(--accent); }
-.pair.is-est .fin { color: var(--warn); }
-.pair.is-muted .fin { color: var(--ink-soft); }
-.pair-lg { font-size: 2.6rem; letter-spacing: -0.03em; line-height: 1.05; }
+.pair-arrow { align-self: center; width: 0.85em; height: 0.55em; fill: none; stroke: var(--ink-mute); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; overflow: visible; }
+.pair .fin { min-width: 1.85em; padding: 0.14em 0.36em; border-radius: 0.55em; text-align: center; font-weight: 700; line-height: 1.2; background: var(--accent-soft); color: var(--accent-deep); }
+.pair.is-final .fin { background: var(--accent); color: var(--on-accent); }
+.pair.is-est .fin { background: var(--warn-soft); color: var(--warn); }
+.pair.is-muted .fin { background: var(--surface-2); color: var(--ink-soft); }
+.pair-lg { font-size: 2.6rem; letter-spacing: -0.03em; line-height: 1.05; gap: 0.3em; }
 .pair-lg .raw { color: var(--ink); font-weight: 650; }
-.pair-lg .arrow { font-size: 0.55em; }
-.pair-lg .fin { font-weight: 750; }
+.pair-lg .pair-arrow { width: 0.5em; height: 0.34em; stroke-width: 1.1; }
+.pair-lg .fin { font-weight: 750; padding: 0.06em 0.26em; border-radius: 0.34em; min-width: 1.5em; }
+.num-pop { animation: numPop var(--t-bouncy) var(--spring-bouncy); }
+@keyframes numPop { 0% { scale: 1; } 35% { scale: 1.28; } 100% { scale: 1; } }
 
 .alert { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.75rem 0.9rem; border-radius: var(--r-m); background: var(--warn-soft); color: var(--warn); font-size: 0.88rem; line-height: 1.45; margin-top: 0.85rem; }
 .alert svg { width: 18px; height: 18px; flex-shrink: 0; margin-top: 0.1rem; }
@@ -320,7 +376,7 @@ button.row:active { background: var(--surface-2); }
 .hero {
   background: var(--hero-bg); color: var(--hero-ink);
   border-radius: 24px; padding: 1.15rem 1.2rem 1.1rem; margin-top: 0.6rem;
-  box-shadow: 0 18px 40px -22px rgba(213, 0, 50, 0.7);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 18px 40px -22px rgba(213, 0, 50, 0.7);
   position: relative; overflow: hidden;
 }
 .hero::after {
@@ -329,21 +385,52 @@ button.row:active { background: var(--surface-2); }
   pointer-events: none;
 }
 .hero-label { font-size: 0.82rem; font-weight: 600; color: var(--hero-soft); letter-spacing: 0.01em; }
-.hero-value { font-size: 3.6rem; font-weight: 750; letter-spacing: -0.04em; line-height: 1; margin: 0.3rem 0 0.25rem; font-variant-numeric: tabular-nums; }
+.hero-value { font-size: 3.6rem; font-weight: 750; letter-spacing: -0.04em; line-height: 1; margin: 0.3rem 0 0.25rem; }
 .hero-sub { font-size: 0.86rem; color: var(--hero-soft); }
 .hero-split { display: flex; gap: 1rem; border-top: 1px solid var(--hero-line); margin-top: 0.9rem; padding-top: 0.8rem; }
 .hero-split > div { flex: 1; min-width: 0; }
 .hero-small { font-size: 1.55rem; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; margin-top: 0.1rem; }
 .hero-empty { font-size: 1.4rem; font-weight: 700; margin: 0.35rem 0 0.3rem; }
 
-.tier { padding: 0.75rem 1rem; border-top: 1px solid var(--line); }
-.tier:first-of-type { border-top: none; }
-.tier-top { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
-.tier-name { font-weight: 600; }
-.tier-name .num { color: var(--ink-soft); font-weight: 500; margin-left: 0.3rem; }
-.tier-detail { font-size: 0.82rem; color: var(--ink-soft); margin-top: 0.2rem; line-height: 1.45; }
-.tier-bar { height: 4px; border-radius: 2px; background: var(--surface-2); margin-top: 0.55rem; overflow: hidden; }
-.tier-bar i { display: block; height: 100%; border-radius: 2px; background: var(--accent); }
+/* Goal gauge: your average as a marker on a track, a line for every goal, and a shaded
+   band for where you can still finish. */
+.goals-card { padding-bottom: 0.9rem; }
+.goals-card .card-head { margin-bottom: 0.1rem; }
+.gauge { position: relative; margin-top: 0; }
+.g-plot { position: relative; height: 47px; margin: 0 9px; cursor: pointer; }
+.g-track { position: absolute; left: -9px; right: -9px; top: 28px; height: 8px; border-radius: 4px; background: var(--surface-2); }
+.g-band { position: absolute; top: 28px; height: 8px; border-radius: 4px; background: var(--accent); opacity: 0.24; transition: left 700ms var(--spring-smooth), width 700ms var(--spring-smooth); }
+.g-band.is-cut { margin-left: -9px; padding-left: 9px; box-sizing: content-box; border-radius: 0 4px 4px 0; -webkit-mask-image: linear-gradient(90deg, transparent, #000 26px); mask-image: linear-gradient(90deg, transparent, #000 26px); }
+.g-tick { position: absolute; top: 23px; height: 21px; width: 2px; margin-left: -1px; border-radius: 1px; background: var(--ink-soft); opacity: 0.6; }
+.g-dot { position: absolute; top: 32px; width: 0; height: 0; transition: left 760ms var(--spring-bouncy); }
+.g-dot::before { content: ''; position: absolute; left: -7px; top: -7px; width: 14px; height: 14px; border-radius: 50%; box-sizing: border-box; }
+.g-now::before { background: var(--accent); box-shadow: 0 0 0 2.5px var(--surface), 0 4px 9px -2px rgba(213, 0, 50, 0.55); }
+.g-proj::before { left: -6px; top: -6px; width: 12px; height: 12px; background: var(--surface); border: 2px solid var(--accent); box-shadow: 0 0 0 2px var(--surface); }
+.g-val { position: absolute; bottom: 12px; left: 0; transform: translateX(-50%); font-size: 0.82rem; font-weight: 700; color: var(--ink); white-space: nowrap; }
+.g-axis { position: relative; height: 2.9rem; margin: 0 9px; }
+.g-axis.has-low { height: 5.4rem; }
+.g-lab { position: absolute; top: 0; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; background: none; border: none; padding: 0; margin: 0; color: var(--ink); font-size: 0.78rem; line-height: 1.25; }
+.g-lab .goal-glyph { margin-bottom: 2px; }
+.g-lab b { font-weight: 650; }
+.g-lab small { font-size: 0.66rem; color: var(--ink-soft); white-space: nowrap; }
+.g-lab.is-low { top: 2.6rem; }
+.g-lab.is-low::before { content: ''; position: absolute; left: 50%; bottom: 100%; width: 1px; height: 2.5rem; background: var(--line-strong); }
+.g-end { position: absolute; right: -9px; top: 1.05rem; font-size: 0.72rem; color: var(--ink-mute); }
+.goal-glyph { display: inline-flex; width: 13px; height: 13px; flex-shrink: 0; }
+.goal-glyph svg { width: 100%; height: 100%; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.goal-glyph .gg-fill { fill: currentColor; stroke: none; }
+.goal-glyph .gg-on { stroke: var(--surface); stroke-width: 1.8; }
+.goal-glyph.is-secured, .goal-glyph.is-track { color: var(--good); }
+.goal-glyph.is-reachable { color: var(--warn); }
+.goal-glyph.is-out { color: var(--ink-mute); }
+.g-lab.is-changed .goal-glyph { animation: numPop var(--t-bouncy) var(--spring-bouncy) 300ms backwards; }
+.goal-rows { margin-top: 0.55rem; border-top: 1px solid var(--line); padding-top: 0.2rem; }
+.goal-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0 0.42rem; padding-top: 0.45rem; font-size: 0.88rem; }
+.goal-name { min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.goal-target { color: var(--ink-soft); margin-left: -0.12rem; flex-shrink: 0; }
+.goal-need { flex-shrink: 0; margin-left: auto; font-size: 0.78rem; color: var(--ink-soft); white-space: nowrap; }
+.goal-need b { color: var(--ink); font-weight: 700; font-size: 0.9rem; }
+.app.entering .g-now::before { animation: numPop var(--t-bouncy) var(--spring-bouncy) 260ms backwards; }
 
 /* ================================================================
    Detail screens
@@ -414,19 +501,44 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
 .btn-row { display: flex; gap: 0.6rem; margin-top: 1rem; }
 .btn-row .btn { flex: 1; }
 
-.seg { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 3px; border-radius: 12px; background: var(--surface-2); }
-.seg-opt { position: relative; z-index: 1; background: none; border: none; padding: 0.5rem 0.4rem; font-size: 0.9rem; font-weight: 600; color: var(--ink-soft); border-radius: 9px; display: flex; align-items: center; justify-content: center; gap: 0.3rem; min-height: 36px; }
+/* Segmented control: a glass track, and a glass lens that swells under the finger and
+   stretches as it travels. */
+.seg {
+  position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 3px; border-radius: 13px;
+  background: var(--glass-seg);
+  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
+  box-shadow: inset 0 1px 2px rgba(26, 20, 20, 0.07), inset 0 0 0 1px rgba(255, 255, 255, 0.45);
+}
+.seg-opt { position: relative; z-index: 1; background: none; border: none; padding: 0.5rem 0.4rem; font-size: 0.9rem; font-weight: 600; color: var(--ink-soft); border-radius: 10px; display: flex; align-items: center; justify-content: center; gap: 0.3rem; min-height: 36px; transition: color var(--t-fast); }
 .seg-opt.is-on { color: var(--ink); }
 .seg-opt svg { width: 20px; height: 20px; }
-.seg-thumb { position: absolute; z-index: 0; top: 3px; bottom: 3px; left: 3px; border-radius: 9px; background: var(--bg); box-shadow: 0 2px 8px -3px rgba(26, 20, 20, 0.25); transition: transform 380ms cubic-bezier(0.3, 1.3, 0.5, 1); }
-:where([data-theme="dark"]) .seg-thumb { background: #3A3234; }
+.seg-thumb {
+  position: absolute; z-index: 0; top: 3px; bottom: 3px; left: 3px; border-radius: 10px;
+  background: var(--glass-thumb);
+  box-shadow: var(--glass-shine), 0 4px 12px -5px rgba(26, 20, 20, 0.24);
+  transition: transform var(--t-smooth) var(--spring-bouncy), scale var(--spring-out);
+}
+.seg:has(.seg-opt:active) .seg-thumb { scale: 1.05 1.1; transition: transform var(--t-smooth) var(--spring-bouncy), scale var(--press-in) ease-out; }
+.seg.is-moving .seg-thumb { animation: lensStretch 360ms ease-out; }
+@keyframes lensStretch { 0% { scale: 1; } 40% { scale: 1.14 0.9; } 100% { scale: 1; } }
+:where([data-theme="dark"]) .seg { box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.05); }
+:where([data-theme="dark"]) .seg-thumb { box-shadow: var(--glass-shine), 0 4px 12px -5px rgba(0, 0, 0, 0.6); }
 
+/* Switch: a glass bead that stretches while it's held and springs across. */
 .switch { position: relative; width: 51px; height: 31px; flex-shrink: 0; }
 .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
-.switch i { position: absolute; inset: 0; border-radius: 999px; background: var(--line-strong); transition: background var(--t-fast); }
-.switch i::after { content: ''; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2); transition: transform 300ms var(--ease-spring); }
+.switch i { position: absolute; inset: 0; border-radius: 999px; background: var(--line-strong); box-shadow: inset 0 1px 3px rgba(26, 20, 20, 0.16); transition: background var(--t-med); }
+.switch i::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 999px;
+  background: linear-gradient(180deg, #FFFFFF, #F3EFEF);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.05), inset 0 1px 0 #FFFFFF;
+  transition: transform var(--t-smooth) var(--spring-bouncy), width 180ms var(--ease-out);
+}
+.switch input:active + i::after { width: 33px; }
 .switch input:checked + i { background: var(--good); }
 .switch input:checked + i::after { transform: translateX(20px); }
+.switch input:checked:active + i::after { transform: translateX(14px); }
+:where([data-theme="dark"]) .switch i { box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5); }
 :where([data-theme="dark"]) .switch input:checked + i { background: #34C759; }
 
 .field { margin-bottom: 1rem; }
@@ -493,7 +605,9 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
 .setup-progress i.is-on { background: var(--accent); }
 .setup-mark { width: 84px; height: 84px; border-radius: 24px; background: var(--accent); display: flex; align-items: center; justify-content: center; margin: 2.5rem 0 1.6rem; box-shadow: 0 20px 40px -18px rgba(213, 0, 50, 0.8); }
 .setup-mark svg { width: 52px; height: 52px; color: #fff; fill: none; stroke: currentColor; stroke-width: 4.2; stroke-linecap: round; stroke-linejoin: round; }
-.setup-mark .mark-star { fill: currentColor; stroke-width: 1; }
+.setup-mark .bm-star { stroke-width: 1.4; }
+.setup-mark .brand-draw.is-intro .bm-check { animation-delay: 380ms; }
+.setup-mark .brand-draw.is-intro .bm-star { animation-delay: 720ms; }
 .setup h2 { font-size: 2rem; font-weight: 750; letter-spacing: -0.03em; line-height: 1.1; margin-bottom: 0.7rem; }
 .setup-lede { color: var(--ink-soft); font-size: 1.02rem; line-height: 1.55; margin-bottom: 1.4rem; }
 .setup-foot { margin-top: auto; padding-top: 1.5rem; display: flex; flex-direction: column; gap: 0.6rem; }
@@ -538,7 +652,7 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
   box-shadow: var(--glass-shine), var(--glass-drop);
-  transition: transform var(--t-med) var(--ease-out), opacity var(--t-med);
+  transition: transform var(--t-smooth) var(--spring-smooth), opacity var(--t-med);
   touch-action: none;
 }
 .tabbar.is-hidden { transform: translateX(-50%) translateY(140%); opacity: 0; pointer-events: none; }
@@ -559,10 +673,10 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.85);
   box-shadow: var(--glass-shine), 0 4px 14px -6px rgba(168, 0, 42, 0.35);
-  transition: transform 460ms cubic-bezier(0.3, 1.35, 0.5, 1), width 300ms var(--ease-out), scale var(--spring-out);
+  transition: transform var(--t-smooth) var(--spring-bouncy), width 300ms var(--ease-out), scale var(--spring-out);
 }
 .tabbar.is-dragging .tab-lens { scale: 1.12; transition: width 300ms var(--ease-out), scale var(--press-in) ease-out; }
-.tabbar:has(.tab:active) .tab-lens { scale: 1.06; }
+.tabbar:has(.tab:active) .tab-lens { scale: 1.06; transition: transform var(--t-smooth) var(--spring-bouncy), scale var(--press-in) ease-out; }
 :where([data-theme="dark"]) .tab-lens { background: rgba(255, 255, 255, 0.13); box-shadow: var(--glass-shine), 0 4px 14px -6px rgba(0, 0, 0, 0.6); }
 
 /* ================================================================
@@ -583,20 +697,21 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
   padding: 0.6rem 1.25rem calc(1.25rem + env(safe-area-inset-bottom));
   max-height: 90vh; max-height: 90dvh;
   overflow-y: auto; overscroll-behavior: contain;
-  background: rgba(255, 255, 255, 0.92);
+  background: var(--glass-sheet);
   -webkit-backdrop-filter: blur(30px) saturate(180%);
   backdrop-filter: blur(30px) saturate(180%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95), 0 -10px 40px -14px rgba(26, 20, 20, 0.3);
+  box-shadow: var(--glass-shine), 0 -10px 40px -14px rgba(26, 20, 20, 0.3);
   transform: translateY(100%);
-  transition: transform var(--t-slow) var(--ease-out);
+  /* Leaving is quick and plain; arriving rides the same spring as everything else. */
+  transition: transform 300ms cubic-bezier(0.4, 0, 0.7, 0.2);
 }
-:where([data-theme="dark"]) .sheet { background: rgba(31, 25, 27, 0.94); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 -10px 40px -14px rgba(0, 0, 0, 0.7); }
-.sheet-backdrop.is-open .sheet { transform: none; }
-.sheet-handle { width: 40px; height: 5px; border-radius: 3px; background: var(--line-strong); margin: 0 auto 1rem; }
+:where([data-theme="dark"]) .sheet { box-shadow: var(--glass-shine), 0 -10px 40px -14px rgba(0, 0, 0, 0.7); }
+.sheet-backdrop.is-open .sheet { transform: none; transition: transform var(--t-smooth) var(--spring-snappy); }
+.sheet-handle { width: 38px; height: 5px; border-radius: 3px; background: var(--ink-mute); opacity: 0.45; margin: 0 auto 1rem; }
 .sheet h2 { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 0.4rem; }
 .sheet-text { font-size: 0.92rem; color: var(--ink-soft); line-height: 1.55; margin-bottom: 1rem; }
 .sheet-body { margin-top: 0.8rem; }
-.sheet-actions { display: flex; gap: 0.6rem; margin-top: 0.6rem; padding-top: 0.6rem; background: var(--sheet-solid); z-index: 2; position: sticky; bottom: calc(-1.25rem - env(safe-area-inset-bottom)); padding-bottom: 0; }
+.sheet-actions { display: flex; gap: 0.6rem; margin-top: 0.6rem; padding-top: 0.6rem; background: linear-gradient(to bottom, transparent, var(--sheet-solid) 45%); z-index: 2; position: sticky; bottom: calc(-1.25rem - env(safe-area-inset-bottom)); padding-bottom: 0; }
 .sheet-actions .btn { flex: 1; }
 .sheet .divider { height: 1px; background: var(--line); margin: 1.1rem 0; }
 .sheet-section { font-size: 0.78rem; font-weight: 650; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-mute); margin: 1.2rem 0 0.55rem; }
@@ -611,19 +726,58 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
   transform: translateX(-50%) translateY(20px);
   z-index: 80;
   display: flex; align-items: center; gap: 0.9rem;
-  background: var(--ink); color: var(--bg);
+  background: rgba(26, 20, 20, 0.86); color: var(--bg);
+  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
   font-size: 0.9rem; font-weight: 500;
   padding: 0.75rem 1.1rem; border-radius: 999px;
-  box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 12px 30px -10px rgba(0, 0, 0, 0.4);
   opacity: 0; pointer-events: none;
   transition: transform var(--t-med) var(--ease-out), opacity var(--t-med);
   max-width: calc(100% - 2rem);
 }
-.toast.is-open { transform: translateX(-50%); opacity: 1; pointer-events: auto; }
+.toast.is-open { transform: translateX(-50%); opacity: 1; pointer-events: auto; transition: transform var(--t-bouncy) var(--spring-bouncy), opacity 180ms; }
 .toast.no-tabbar { bottom: calc(env(safe-area-inset-bottom) + 1rem); }
 .toast-action { background: none; border: none; color: var(--accent-soft); font-weight: 700; font-size: 0.9rem; padding: 0; white-space: nowrap; }
-:where([data-theme="dark"]) .toast { background: #2E2729; color: var(--ink); box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.7), inset 0 0 0 1px rgba(255, 255, 255, 0.06); }
+:where([data-theme="dark"]) .toast { background: rgba(52, 44, 46, 0.88); color: var(--ink); box-shadow: 0 12px 30px -10px rgba(0, 0, 0, 0.7), inset 0 0 0 1px rgba(255, 255, 255, 0.06); }
 :where([data-theme="dark"]) .toast-action { color: var(--accent-deep); }
+
+/* ================================================================
+   The moment after a change: what it did to the final and to your average
+   ================================================================ */
+
+.impact {
+  position: fixed; left: 50%;
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 0.6rem);
+  z-index: 74;
+  width: max-content; min-width: 232px; max-width: min(380px, calc(100% - 2rem));
+  padding: 0.7rem 1.05rem 0.8rem;
+  border-radius: 24px;
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: blur(26px) saturate(185%); backdrop-filter: blur(26px) saturate(185%);
+  box-shadow: var(--glass-shine), 0 18px 40px -16px rgba(26, 20, 20, 0.42), 0 2px 6px -2px rgba(26, 20, 20, 0.1);
+  transform: translateX(-50%) translateY(26px) scale(0.9);
+  opacity: 0; pointer-events: none; cursor: pointer;
+  transition: transform 300ms var(--ease-out), opacity 220ms;
+}
+.impact.is-open { transform: translateX(-50%); opacity: 1; pointer-events: auto; transition: transform var(--t-bouncy) var(--spring-bouncy), opacity 180ms; }
+.impact.no-tabbar { bottom: calc(env(safe-area-inset-bottom) + 1rem); }
+.im-title { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; font-size: 0.86rem; font-weight: 600; color: var(--ink-soft); }
+.im-title span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.im-star { width: 15px; height: 15px; flex-shrink: 0; fill: var(--accent); }
+.impact.is-open .im-star { animation: imStar 900ms var(--spring-bouncy) 240ms backwards; }
+@keyframes imStar { from { transform: scale(0) rotate(-180deg); opacity: 0; } }
+.im-cells { display: flex; gap: 1.5rem; margin-top: 0.35rem; }
+.im-cell { display: flex; flex-direction: column; min-width: 0; }
+.im-label { font-size: 0.72rem; font-weight: 600; color: var(--ink-soft); }
+.im-val { display: inline-flex; align-items: center; gap: 0.38rem; font-size: 1.3rem; line-height: 1.25; letter-spacing: -0.015em; white-space: nowrap; }
+.im-val b { font-weight: 750; }
+.im-was { color: var(--ink-soft); font-weight: 500; }
+.im-val .pair-arrow { width: 0.62em; height: 0.42em; }
+.im-dir { width: 13px; height: 13px; fill: none; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.im-dir.is-up { stroke: var(--good); }
+.im-dir.is-down { stroke: var(--risk); }
+.impact.is-open .im-val b { animation: numPop var(--t-bouncy) var(--spring-bouncy) 200ms backwards; }
+:where([data-theme="dark"]) .impact { box-shadow: var(--glass-shine), 0 18px 40px -16px rgba(0, 0, 0, 0.8); }
 
 /* ================================================================
    What if (sandbox)
@@ -696,3 +850,23 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
 .more-toggle .row-chev { transition: transform var(--t-fast); margin-left: 0; }
 .more-toggle span + .row-chev { margin-left: auto; }
 .more-toggle.is-open .row-chev { transform: rotate(90deg); }
+
+/* Grades | Forecast: the pane you pick slides in from its side. */
+.course-pane.pane-next { animation: paneNext var(--t-snappy) var(--spring-snappy) backwards; }
+.course-pane.pane-prev { animation: panePrev var(--t-snappy) var(--spring-snappy) backwards; }
+@keyframes paneNext { from { opacity: 0; transform: translateX(26px); } }
+@keyframes panePrev { from { opacity: 0; transform: translateX(-26px); } }
+
+/* ================================================================
+   Reduce Motion: things change in place
+   ================================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  .app.entering .screen.is-active, .app.entering .screen.is-active > *, .course-pane, .setup-inner,
+  .brand-draw .bm-check, .brand-draw .bm-star, .num-pop, .seg.is-moving .seg-thumb, .g-now::before, .g-lab .goal-glyph,
+  .impact.is-open .im-star, .impact.is-open .im-val b, .chart-tip { animation: none !important; }
+  .g-dot, .g-band, .seg-thumb, .tab-lens, .switch i::after { transition: none !important; }
+  .sheet, .sheet-backdrop.is-open .sheet, .toast, .toast.is-open, .impact, .impact.is-open, .tabbar { transition: opacity var(--t-fast) !important; }
+  .impact { transform: translateX(-50%); }
+  .toast { transform: translateX(-50%); }
+}

@@ -3,7 +3,7 @@
 
   var G = window.Grades;
   var S = window.Store;
-  var APP_VERSION = '1.0';
+  var APP_VERSION = '1.1';
 
   var data = S.load();
 
@@ -38,7 +38,164 @@
   }
   var persistAsked = false;
 
-  function commit() { persist(); renderAll(); }
+  // label: what just changed ("Exam 3 · 9.2"), for the moment that shows its effect.
+  function commit(label) {
+    persist();
+    var before = lastSnap;
+    renderAll();
+    if (before) showImpact(before, lastSnap, label);
+  }
+
+  // ================================================================
+  // Numbers that react
+  // ================================================================
+  // Every average on screen remembers the value it last showed there. When a grade, a final
+  // or a weight changes it, the number counts from the old value to the new one. Numbers on
+  // a screen you weren't looking at count when you come back to it.
+
+  var seen = {};        // screen -> { number -> the value last shown there }
+  var lastSnap = null;  // every course's grade and the averages, as of the last redraw
+
+  function countAttr(key, v, fmt, t) {
+    return isNum(v) ? ' data-count="' + key + '" data-v="' + v + '"' + (fmt ? ' data-fmt="' + fmt + '"' : '') + (t ? ' data-t="' + t + '"' : '') : '';
+  }
+  function cut2(v) { return Math.floor(v * 100 + 1e-7) / 100; }
+
+  function react(screen) {
+    if (!screen) return;
+    layoutGauges(screen);
+    var ctx = screen.id || screen.dataset.key || 'screen';
+    var memo = seen[ctx] || (seen[ctx] = {});
+    var prev = {}, k;
+    for (k in memo) prev[k] = memo[k];
+    var still = reducedMotion();
+    var rose = false;
+    screen.querySelectorAll('[data-count]').forEach(function (el) {
+      if (el.closest('.morph-clone')) return;
+      var key = el.dataset.count, v = parseFloat(el.dataset.v), old = prev[key];
+      memo[key] = v;
+      if (old == null || Math.abs(old - v) < 1e-9 || still) return;
+      if ((key === 'cum' || key === 'proj') && v > old) rose = true;
+      countTo(el, old, v);
+    });
+    // Gauge markers slide to their new spot; a goal that changes state gives a small pop.
+    screen.querySelectorAll('[data-slide]').forEach(function (el) {
+      var key = 'slide:' + el.dataset.slide, now = el.dataset.l + '|' + (el.dataset.w || ''), old = prev[key];
+      memo[key] = now;
+      if (old == null || old === now || still) return;
+      var o = old.split('|');
+      el.style.transition = 'none';
+      el.style.left = o[0] + '%';
+      if (o[1]) el.style.width = o[1] + '%';
+      void el.offsetWidth;
+      el.style.transition = '';
+      el.style.left = el.dataset.l + '%';
+      if (el.dataset.w) el.style.width = el.dataset.w + '%';
+    });
+    screen.querySelectorAll('[data-state]').forEach(function (el) {
+      var key = 'state:' + el.dataset.state, old = prev[key];
+      memo[key] = el.dataset.s;
+      if (old == null || old === el.dataset.s || still) return;
+      el.classList.add('is-changed');
+    });
+    if (rose) twinkleMark(screen);
+  }
+
+  // Counts a number from one value to another. Every frame follows the display rules:
+  // averages are cut to two decimals, and a raw grade always sits beside its own rounding.
+  function countTo(el, from, to) {
+    var fmt = el.dataset.fmt || 'avg';
+    var t = +el.dataset.t || 5;
+    var rawEl = fmt === 'pair' ? el.querySelector('.raw') : el;
+    var finEl = fmt === 'pair' ? el.querySelector('.fin') : null;
+    if (!rawEl) {
+      // A whole grade shows only its tile: nothing to count, the tile just lands.
+      if (finEl && G.roundFinal(from, t) !== G.roundFinal(to, t)) finEl.classList.add('num-pop');
+      return;
+    }
+    var endRaw = rawEl.textContent, endFin = finEl ? finEl.textContent : '';
+    var startFin = finEl ? String(G.roundFinal(from, t)) : '';
+    function show(v, exact) {
+      if (fmt === 'avg') { rawEl.textContent = G.fmtAvg(v); return; }
+      var q = exact ? v : cut2(v);
+      rawEl.textContent = G.fmtRaw(q, t);
+      if (finEl) finEl.textContent = G.roundFinal(q, t);
+    }
+    show(from, true);
+    var t0 = 0, dur = 700;
+    function frame(now) {
+      if (!el.isConnected) return;
+      if (!t0) t0 = now;
+      var k = Math.min(1, (now - t0) / dur);
+      if (k < 1) {
+        show(from + (to - from) * (1 - Math.pow(1 - k, 3)));
+        requestAnimationFrame(frame);
+        return;
+      }
+      rawEl.textContent = endRaw;
+      if (finEl) {
+        finEl.textContent = endFin;
+        if (endFin !== startFin) { finEl.classList.remove('num-pop'); void finEl.offsetWidth; finEl.classList.add('num-pop'); }
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+
+  function snapshot() {
+    var s = G.summarize(data), per = {};
+    data.courses.forEach(function (c) {
+      var r = result(c), fin = isFinal(c);
+      per[c.id] = { name: c.name, raw: r.raw, fin: fin ? r.final : r.expectedFinal, done: fin, counts: c.counts };
+    });
+    return { official: s.official, projected: s.projected, per: per };
+  }
+  function differs(a, b) { return isNum(a) !== isNum(b) || (isNum(a) && Math.abs(a - b) > 1e-9); }
+
+  // The moment after a change: what it did to the course's final and to your average.
+  var impactTimer = null;
+  function impactCell(label, was, now, fmt) {
+    var a = isNum(was) ? fmt(was) : null, b = fmt(now);
+    var dir = isNum(was) && now > was + 1e-9 ? 'up' : isNum(was) && now < was - 1e-9 ? 'down' : '';
+    var glyph = dir ? '<svg class="im-dir is-' + dir + '" viewBox="0 0 12 12" aria-hidden="true"><path d="' + (dir === 'up' ? 'M6 10V2M2.5 5.5L6 2l3.5 3.5' : 'M6 2v8M2.5 6.5L6 10l3.5-3.5') + '"/></svg>' : '';
+    var same = a === b;
+    return '<div class="im-cell"><span class="im-label">' + label + (a !== null && same && !dir ? ' stays' : '') + '</span><span class="im-val num">' +
+      (a !== null && !same ? '<span class="im-was">' + a + '</span>' + ARROW : '') + '<b>' + b + '</b>' + glyph + '</span></div>';
+  }
+  function showImpact(a, b, label) {
+    var changed = [], id;
+    for (id in b.per) {
+      var x = a.per[id], y = b.per[id];
+      if (!x || differs(x.raw, y.raw) || differs(x.fin, y.fin) || x.done !== y.done || x.counts !== y.counts) changed.push({ was: x || null, now: y });
+    }
+    for (id in a.per) if (!b.per[id]) changed.push({ was: a.per[id], now: null });
+    if (!changed.length) return;
+    var one = changed.length === 1 ? changed[0] : null;
+    var cells = '', starred = false;
+    if (one && one.now && isNum(one.now.fin)) {
+      var wasFin = one.was && isNum(one.was.fin) ? one.was.fin : null;
+      cells += impactCell(one.now.done ? 'Final' : 'Expected', wasFin, one.now.fin, String);
+      starred = wasFin !== null && one.now.fin > wasFin;
+    }
+    if (differs(a.official, b.official) && isNum(b.official)) cells += impactCell('Cumulative', a.official, b.official, G.fmtAvg);
+    else if (isNum(b.projected)) cells += impactCell('Projected', a.projected, b.projected, G.fmtAvg);
+    if (!cells) return;
+    var title = label || (one ? (one.now || one.was).name : 'Updated');
+    var box = $('impact');
+    box.innerHTML = '<div class="im-title"><span>' + esc(title) + '</span>' + (starred ? '<svg class="im-star" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0l1.85 6.15L16 8l-6.15 1.85L8 16l-1.85-6.15L0 8l6.15-1.85z"/></svg>' : '') + '</div><div class="im-cells">' + cells + '</div>';
+    hideToast();
+    box.classList.remove('hidden', 'is-open');
+    void box.offsetWidth;
+    box.classList.add('is-open');
+    clearTimeout(impactTimer);
+    impactTimer = setTimeout(hideImpact, 4600);
+  }
+  function hideImpact() {
+    var box = $('impact');
+    clearTimeout(impactTimer);
+    box.classList.remove('is-open');
+    setTimeout(function () { if (!box.classList.contains('is-open')) box.classList.add('hidden'); }, 320);
+  }
+  $('impact').addEventListener('click', hideImpact);
 
   // ---------- data access ----------
 
@@ -66,9 +223,32 @@
 
   // ---------- HTML pieces ----------
 
-  function pairHTML(raw, t, cls) {
+  // "9.47 → 10": the raw grade, and the rounded final it becomes in its own tile.
+  var ARROW = '<svg class="pair-arrow" viewBox="0 0 16 10" aria-hidden="true"><path d="M1 5h13M10 1l4 4-4 4"/></svg>';
+  function pairHTML(raw, t, cls, key) {
     if (!isNum(raw)) return '<span class="pair is-muted"><span class="raw">–</span></span>';
-    return '<span class="pair ' + (cls || '') + '"><span class="raw">' + G.fmtRaw(raw, t) + '</span><span class="arrow">→</span><b class="fin">' + G.roundFinal(raw, t) + '</b></span>';
+    var fin = G.roundFinal(raw, t);
+    // A whole grade is its own final: just the tile.
+    var whole = Math.abs(raw - fin) < 1e-9;
+    return '<span class="pair ' + (cls || '') + '"' + (key ? countAttr(key, raw, 'pair', t) : '') + '>' +
+      (whole ? '' : '<span class="raw">' + G.fmtRaw(raw, t) + '</span>' + ARROW + '<span class="sr-only"> rounds to </span>') + '<b class="fin">' + fin + '</b></span>';
+  }
+  function avgHTML(key, v) { return '<span' + countAttr(key, v) + '>' + G.fmtAvg(v) + '</span>'; }
+
+  // The mark draws itself when the app opens: the check first, then the star lands.
+  var bootAt = Date.now();
+  var MARK_PATHS = '<path class="bm-check" d="M9 26l8.5 8.5L33.5 18"/><path class="bm-star" d="M38.5 2l1.85 6.15L46.5 10l-6.15 1.85L38.5 18l-1.85-6.15L30.5 10l6.15-1.85z"/>';
+  function brandMarkHTML() {
+    var since = Date.now() - bootAt;
+    var intro = since < 1400 && !reducedMotion();
+    return '<svg class="brand-mark brand-draw' + (intro ? ' is-intro' : '') + '" viewBox="0 0 48 48" aria-hidden="true"' + (intro ? ' style="--since:' + since + 'ms"' : '') + '>' + MARK_PATHS + '</svg>';
+  }
+  function twinkleMark(screen) {
+    var mark = screen.querySelector('.topbar .brand-mark');
+    if (!mark) return;
+    mark.classList.remove('is-intro', 'is-twinkle');
+    void mark.getBoundingClientRect();
+    mark.classList.add('is-twinkle');
   }
   function chip(text, kind) { return '<span class="chip ' + (kind ? 'chip-' + kind : '') + '">' + esc(text) + '</span>'; }
 
@@ -84,7 +264,15 @@
     var idx = Math.max(0, opts.map(function (o) { return o.dataset.val; }).indexOf(String(val)));
     opts.forEach(function (o, i) { o.classList.toggle('is-on', i === idx); o.setAttribute('aria-checked', String(i === idx)); });
     var thumb = seg.querySelector('.seg-thumb');
-    if (thumb) thumb.style.transform = 'translateX(' + (idx * 100) + '%)';
+    if (!thumb) return;
+    var to = 'translateX(' + (idx * 100) + '%)';
+    if (thumb.style.transform === to) return;
+    thumb.style.transform = to;
+    seg.classList.remove('is-moving');
+    void seg.offsetWidth;
+    seg.classList.add('is-moving');
+    clearTimeout(seg._moveTimer);
+    seg._moveTimer = setTimeout(function () { seg.classList.remove('is-moving'); }, 380);
   }
   function switchHTML(name, on, extra) {
     return '<label class="switch"><input type="checkbox" data-sw="' + name + '"' + (on ? ' checked' : '') + (extra || '') + '><i></i></label>';
@@ -122,11 +310,11 @@
   function courseRowHTML(c, sub) {
     var r = result(c);
     var t = thr(c);
-    var right = isNum(r.raw) ? pairHTML(r.raw, t, r.estimate ? 'is-est' : '') : '<span class="row-value">No grades yet</span>';
+    var right = isNum(r.raw) ? pairHTML(r.raw, t, (r.estimate ? 'is-est' : '') + (isFinal(c) ? ' is-final' : ''), 'c:' + c.id) : '<span class="row-value">No grades yet</span>';
     var subParts = [];
     if (sub) subParts.push('<span>' + esc(sub) + '</span>');
     var chips = courseChips(c, r);
-    return '<button class="row" data-act="open-course" data-id="' + c.id + '">' +
+    return '<button class="row" data-act="open-course" data-id="' + c.id + '" data-morph-id="c:' + c.id + '">' +
       '<span class="row-main"><span class="row-title">' + esc(c.name) + '</span>' +
       ((subParts.length || chips) ? '<span class="row-sub">' + subParts.join('') + chips + '</span>' : '') + '</span>' +
       '<span class="row-end">' + right + icon('chev', 'row-chev') + '</span></button>';
@@ -153,33 +341,46 @@
   var TAB_TITLES = { overview: 'Overview', terms: 'Terms', settings: 'Settings' };
   var ui = { tab: 'overview', stack: [] };
   var appEl = $('app');
+  var motionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+  function reducedMotion() { return !!motionQuery && motionQuery.matches; }
+  function clamp01(n) { return n < 0 ? 0 : n > 1 ? 1 : n; }
 
   function tabEl(name) { return $('screen-' + name); }
   function topScreen() { return ui.stack.length ? ui.stack[ui.stack.length - 1].el : tabEl(ui.tab); }
 
-  function setVisible(el, anim) {
-    Array.prototype.forEach.call(appEl.querySelectorAll('.screen'), function (s) {
-      s.classList.remove('is-active', 'anim-push', 'anim-pop');
-    });
-    void el.offsetWidth;
-    if (anim === 'anim-push' || anim === 'anim-pop') el.classList.add(anim);
-    el.classList.add('is-active');
-    appEl.classList.toggle('instant', anim === 'instant');
+  function setActive(el) {
+    Array.prototype.forEach.call(appEl.querySelectorAll('.screen'), function (s) { s.classList.toggle('is-active', s === el); });
+  }
+  // Tab bar and toast position for whatever is on top.
+  function setChrome() {
     var pushed = ui.stack.length > 0;
     $('tabbar').classList.toggle('is-hidden', pushed);
     appEl.classList.toggle('no-tabbar', pushed);
     $('toast').classList.toggle('no-tabbar', pushed);
-    updateCompact();
+    $('impact').classList.toggle('no-tabbar', pushed);
   }
 
+  // A plain switch between tabs: the new one slides in from the side you're heading to.
+  // (.entering is what turns that on, so nothing replays behind a screen opening or closing.)
   function goTab(name) {
     if (ui.stack.length) return;
+    endMorph();
+    var dir = TABS.indexOf(name) - TABS.indexOf(ui.tab);
     ui.tab = name;
     renderTab(name);
     document.querySelectorAll('.tab').forEach(function (t) { t.classList.toggle('is-active', t.dataset.tab === name); });
     moveTabLens();
+    var el = tabEl(name);
+    setActive(null);
+    appEl.classList.remove('entering');
+    void el.offsetWidth;
+    appEl.style.setProperty('--dir', dir > 0 ? '1' : dir < 0 ? '-1' : '0');
+    appEl.classList.add('entering');
+    el.classList.add('is-active');
+    setChrome();
     window.scrollTo(0, 0);
-    setVisible(tabEl(name), '');
+    updateCompact();
+    react(el);
   }
 
   function backLabelFor(index) {
@@ -191,50 +392,255 @@
     return 'Back';
   }
 
-  function push(type, id) {
+  // src: the row that was tapped. The new screen grows out of it.
+  function push(type, id, src) {
+    endMorph();
+    var under = topScreen();
     var el = document.createElement('section');
     el.className = 'screen';
     el.dataset.type = type;
+    el.dataset.key = type + ':' + id;
     appEl.appendChild(el);
-    var entry = { type: type, id: id, el: el, scroll: window.scrollY };
+    var entry = { type: type, id: id, el: el, scroll: window.scrollY, morphId: src && src.dataset ? src.dataset.morphId || null : null };
     ui.stack.push(entry);
+    delete seen[el.dataset.key];
     renderEntry(entry, ui.stack.length - 1);
     history.pushState({ ace: ui.stack.length }, '');
-    window.scrollTo(0, 0);
-    setVisible(el, 'anim-push');
+    appEl.classList.remove('entering');
+    setChrome();
+    if (reducedMotion()) {
+      setActive(el);
+      window.scrollTo(0, 0);
+      updateCompact();
+      react(el);
+      return;
+    }
+    startMorph({ entry: entry, under: under, from: 0, to: 1, detailScroll: 0, src: src });
   }
 
-  function removeTop(anim) {
+  function detachTop() {
     var entry = ui.stack.pop();
-    if (!entry) return;
-    entry.el.remove();
-    if (entry.type === 'whatif') ui.whatIf = null;  // leaving throws the sandbox away
-    var under = topScreen();
+    if (entry && entry.type === 'whatif') ui.whatIf = null;  // leaving throws the sandbox away
+    return entry;
+  }
+  function renderUnder() {
     if (ui.stack.length) renderEntry(ui.stack[ui.stack.length - 1], ui.stack.length - 1);
     else renderTab(ui.tab);
-    setVisible(under, anim);
+  }
+  // Take the top screen away with no animation.
+  function dropTop() {
+    endMorph();
+    var entry = detachTop();
+    if (!entry) return;
+    entry.el.remove();
+    renderUnder();
+    setActive(topScreen());
+    setChrome();
     window.scrollTo(0, entry.scroll || 0);
+    updateCompact();
   }
 
+  // Going back: the screen shrinks into the row it came from.
+  // fromHistory: the browser's own back already popped the entry. viaDrag: an edge swipe is holding the screen.
   var ignorePops = 0;
-  function pop(instant) {
-    if (!ui.stack.length) return;
-    if (history.state && history.state.ace) { ignorePops++; history.back(); }
-    removeTop(instant ? 'instant' : 'anim-pop');
+  function closeTop(o) {
+    o = o || {};
+    var entry = ui.stack[ui.stack.length - 1];
+    if (!entry) return;
+    if (!o.fromHistory && history.state && history.state.ace) { ignorePops++; history.back(); }
+    var m = morph;
+    if (m && m.entry === entry && (o.viaDrag || (m.to === 1 && !m.dragging))) {
+      // Already in motion (a swipe let go, or a change of mind while it was opening): the same spring heads back.
+      detachTop();
+      setChrome();
+      m.to = 0;
+      m.dragging = false;
+      runMorph();
+      return;
+    }
+    endMorph();
+    var detailScroll = window.scrollY;
+    detachTop();
+    var under = topScreen();
+    renderUnder();
+    setChrome();
+    appEl.classList.remove('entering');
+    if (reducedMotion()) {
+      entry.el.remove();
+      setActive(under);
+      window.scrollTo(0, entry.scroll || 0);
+      updateCompact();
+      react(under);
+      return;
+    }
+    startMorph({ entry: entry, under: under, from: 1, to: 0, detailScroll: detailScroll });
   }
   function popToRoot() {
     var n = ui.stack.length;
     if (!n) return;
     var depth = history.state && history.state.ace ? history.state.ace : 0;
-    while (ui.stack.length) removeTop('instant');
+    while (ui.stack.length) dropTop();
     if (depth) { ignorePops++; history.go(-depth); }
   }
 
   window.addEventListener('popstate', function () {
     if (ignorePops > 0) { ignorePops--; return; }
     var depth = history.state && history.state.ace ? history.state.ace : 0;
-    while (ui.stack.length > depth) removeTop('instant');
+    if (ui.stack.length === depth + 1) { closeTop({ fromHistory: true }); return; }
+    while (ui.stack.length > depth) dropTop();
   });
+
+  // ---------- row ⇄ screen ----------
+  // Opening a course or a term grows its row into the screen; going back shrinks the screen
+  // into that same row, like opening and closing an app on the iPhone home screen. One spring
+  // drives it, so an edge swipe can hold it and a change of mind can turn it around.
+
+  var morph = null;
+  var MORPH_DEFAULT = { course: 'c:', term: 't:', whatif: 'whatif' };
+
+  function morphSource(under, entry) {
+    var ids = [entry.morphId, entry.type === 'whatif' ? 'whatif' : MORPH_DEFAULT[entry.type] + entry.id];
+    var nodes = under.querySelectorAll('[data-morph-id]');
+    for (var k = 0; k < ids.length; k++) {
+      if (!ids[k]) continue;
+      for (var i = 0; i < nodes.length; i++) if (nodes[i].dataset.morphId === ids[k]) return nodes[i];
+    }
+    return null;
+  }
+
+  function startMorph(o) {
+    var el = o.entry.el, under = o.under;
+    var H = window.innerHeight;
+    appEl.classList.add('is-morphing');
+    // The screen underneath stays in the page at the spot you left it; the new one floats above.
+    setActive(under);
+    layoutGauges(under);
+    el.classList.add('is-morph');
+    el.style.height = H + 'px';
+    if (o.from === 1) window.scrollTo(0, o.entry.scroll || 0);
+    el.scrollTop = o.detailScroll || 0;
+    var box = el.getBoundingClientRect();
+    var m = morph = { entry: o.entry, el: el, under: under, W: box.width, L: box.left, H: H, p: o.from, v: 0, to: o.to, ox: 0, oy: 0, detailScroll: o.detailScroll || 0, dragging: !!o.dragging, raf: 0, last: 0 };
+
+    var src = o.src && under.contains(o.src) ? o.src : morphSource(under, o.entry);
+    var r = src ? src.getBoundingClientRect() : null;
+    if (r && o.from === 1 && (r.top < 64 || r.bottom > H - 40)) {
+      // Heading back to a row that has slipped out of view: bring it back first.
+      window.scrollTo(0, Math.max(0, window.scrollY + r.top - Math.max(96, (H - r.height) / 2)));
+      r = src.getBoundingClientRect();
+    }
+    if (r && r.width > 0 && r.bottom > 0 && r.top < H) {
+      var radius = Math.max(14, parseFloat(getComputedStyle(src).borderTopLeftRadius) || 0);
+      m.rect = { left: r.left, top: r.top, width: r.width, height: r.height, radius: radius };
+      var clone = document.createElement('div');
+      clone.className = 'morph-clone';
+      var copy = src.cloneNode(true);
+      copy.removeAttribute('data-morph-id');
+      copy.removeAttribute('data-act');
+      clone.appendChild(copy);
+      clone.style.width = r.width + 'px';
+      clone.style.height = r.height + 'px';
+      clone.style.top = m.detailScroll + 'px';
+      clone.style.borderRadius = radius + 'px';
+      clone.style.transform = 'scale(' + (m.W / r.width) + ')';
+      el.appendChild(clone);
+      m.clone = clone;
+      m.src = src;
+      src.style.visibility = 'hidden';
+    } else {
+      // Nothing to grow from or land on (a brand-new course, say): a soft zoom and fade.
+      m.rect = { left: m.L + m.W * 0.05, top: H * 0.06, width: m.W * 0.9, height: H * 0.9, radius: 28 };
+      m.fade = true;
+    }
+    m.scrim = document.createElement('div');
+    m.scrim.className = 'morph-scrim';
+    document.body.appendChild(m.scrim);
+    under.style.transformOrigin = '50% ' + (window.scrollY + H / 2 - under.offsetTop) + 'px';
+    paintMorph(m);
+    if (!m.dragging) runMorph();
+  }
+
+  // p runs from 0 (the row) to 1 (the full screen). The screen keeps its proportions:
+  // it scales with the width and is cropped to the height, so nothing ever looks squashed.
+  function paintMorph(m) {
+    var p = m.p, pc = clamp01(p), r = m.rect;
+    var w = Math.max(40, r.width + (m.W - r.width) * p);
+    var h = Math.max(40, r.height + (m.H - r.height) * p);
+    var x = (r.left - m.L) * (1 - p) + m.ox;
+    var y = r.top * (1 - p) + m.oy;
+    var s = w / m.W;
+    var radius = (r.radius * (1 - pc) + 130 * pc * (1 - pc)) / s;
+    var cut = Math.max(0, m.H - h / s);
+    var clip = 'inset(0px 0px ' + cut.toFixed(2) + 'px 0px round ' + radius.toFixed(2) + 'px)';
+    m.el.style.transform = 'translate3d(' + x.toFixed(2) + 'px,' + y.toFixed(2) + 'px,0) scale(' + s.toFixed(5) + ')';
+    m.el.style.webkitClipPath = clip;
+    m.el.style.clipPath = clip;
+    // The row's face fades out before the screen fades in, so the two never ghost over each other.
+    if (m.clone) {
+      m.clone.style.opacity = clamp01(1 - p / 0.26).toFixed(3);
+      m.el.style.setProperty('--mo', clamp01((p - 0.12) / 0.34).toFixed(3));
+    }
+    m.el.classList.toggle('is-landing', !!m.clone && p < 0.3);
+    if (m.fade) m.el.style.opacity = clamp01(p * 1.5).toFixed(3);
+    m.scrim.style.opacity = (0.3 * pc).toFixed(3);
+    m.under.style.transform = 'scale(' + (1 - 0.055 * pc).toFixed(5) + ')';
+  }
+
+  function runMorph() {
+    if (!morph || morph.raf) return;
+    morph.last = 0;
+    morph.raf = requestAnimationFrame(stepMorph);
+  }
+
+  function stepMorph(now) {
+    var m = morph;
+    if (!m) return;
+    m.raf = 0;
+    var dt = m.last ? Math.min(0.034, (now - m.last) / 1000) : 1 / 60;
+    m.last = now;
+    // Opening settles without overshoot; closing is a touch looser so the row lands with a small give.
+    var k = m.to === 1 ? 300 : 250;
+    var c = m.to === 1 ? 31 : 26;
+    for (var t = 0; t < dt; t += 0.004) {
+      var step = Math.min(0.004, dt - t);
+      m.v += (-k * (m.p - m.to) - c * m.v) * step;
+      m.p += m.v * step;
+    }
+    var ease = Math.pow(0.002, dt / 0.32);
+    m.ox *= ease;
+    m.oy *= ease;
+    if (Math.abs(m.p - m.to) < 0.0015 && Math.abs(m.v) < 0.04) { endMorph(); return; }
+    paintMorph(m);
+    m.raf = requestAnimationFrame(stepMorph);
+  }
+
+  // Settle wherever the spring was heading and put the page back to normal.
+  function endMorph() {
+    var m = morph;
+    if (!m) return;
+    morph = null;
+    if (m.raf) cancelAnimationFrame(m.raf);
+    var opened = m.to === 1;
+    m.el.classList.remove('is-morph', 'is-landing');
+    m.el.style.transform = m.el.style.webkitClipPath = m.el.style.clipPath = m.el.style.height = m.el.style.opacity = '';
+    m.el.style.removeProperty('--mo');
+    m.under.style.transform = m.under.style.transformOrigin = '';
+    if (m.clone) m.clone.remove();
+    if (m.src) m.src.style.visibility = '';
+    m.scrim.remove();
+    appEl.classList.remove('is-morphing');
+    if (opened) {
+      setActive(m.el);
+      window.scrollTo(0, m.detailScroll);
+    } else {
+      m.el.remove();
+      setActive(m.under);
+    }
+    updateCompact();
+    react(opened ? m.el : m.under);
+  }
+  window.addEventListener('resize', endMorph);
+  document.addEventListener('visibilitychange', function () { if (document.hidden) endMorph(); });
 
   function renderEntry(entry, index) {
     if (entry.type === 'term') {
@@ -258,21 +664,25 @@
   }
 
   function renderAll() {
+    endMorph();
     TABS.forEach(renderTab);
     // A screen whose term or course was deleted closes itself.
     for (var i = 0; i < ui.stack.length; i++) {
       if (!renderEntry(ui.stack[i], i)) {
         var drop = ui.stack.length - i;
-        while (ui.stack.length > i) removeTop('instant');
+        while (ui.stack.length > i) dropTop();
         ignorePops++;
         history.go(-drop);
         break;
       }
     }
     updateCompact();
+    lastSnap = snapshot();
+    react(topScreen());
   }
 
   function updateCompact() {
+    if (morph) return;
     var y = window.scrollY;
     var bar = topScreen().querySelector('.topbar');
     if (!bar) return;
@@ -342,23 +752,13 @@
   }
 
   // ---------- left-edge swipe back (the home-screen app has no browser swipe) ----------
+  // The screen shrinks toward its row under your finger; let go and it lands there or springs back.
 
   function wireEdgeSwipe() {
     if (!window.navigator.standalone) return;
-    var screen = null, under = null;
     var tracking = false, locked = false, startX = 0, startY = 0, lastX = 0, lastT = 0, speed = 0, dx = 0;
-    function paint(p) {
-      screen.style.transform = 'translateX(' + (p * 100) + '%)';
-      under.style.transform = 'translateX(' + (-30 + 30 * p) + '%)';
-      under.style.setProperty('--shade', String(0.22 * (1 - p)));
-    }
-    function cleanup() {
-      if (screen) { screen.classList.remove('is-dragging', 'is-settling', 'is-leaving'); screen.style.transform = ''; }
-      if (under) { under.classList.remove('is-under', 'is-settling', 'is-leaving'); under.style.transform = ''; under.style.removeProperty('--shade'); }
-      screen = under = null;
-    }
     document.addEventListener('touchstart', function (e) {
-      if (!ui.stack.length || screen || document.querySelector('.sheet-backdrop') || e.touches[0].clientX > 22) return;
+      if (!ui.stack.length || morph || e.touches.length !== 1 || document.querySelector('.sheet-backdrop') || e.touches[0].clientX > 24) return;
       tracking = true; locked = false; dx = 0; speed = 0;
       startX = lastX = e.touches[0].clientX; startY = e.touches[0].clientY; lastT = e.timeStamp;
     }, { passive: true });
@@ -368,35 +768,41 @@
       if (!locked) {
         if (Math.abs(mx) < 6 && Math.abs(my) < 6) return;
         if (Math.abs(my) > Math.abs(mx)) { tracking = false; return; }
+        if (reducedMotion()) { tracking = false; closeTop(); return; }
         locked = true;
-        screen = topScreen();
-        under = ui.stack.length > 1 ? ui.stack[ui.stack.length - 2].el : tabEl(ui.tab);
-        appEl.classList.add('instant');
-        under.classList.add('is-under');
-        screen.classList.add('is-dragging');
+        var n = ui.stack.length;
+        var entry = ui.stack[n - 1];
+        var under = n > 1 ? ui.stack[n - 2].el : tabEl(ui.tab);
+        appEl.classList.remove('entering');
+        if (n > 1) renderEntry(ui.stack[n - 2], n - 2); else renderTab(ui.tab);
+        startMorph({ entry: entry, under: under, from: 1, to: 1, detailScroll: window.scrollY, dragging: true });
       }
       e.preventDefault();
+      var m = morph;
+      if (!m) return;
       if (e.timeStamp > lastT) speed = (x - lastX) / (e.timeStamp - lastT);
       lastX = x; lastT = e.timeStamp;
       dx = Math.max(0, mx);
-      paint(Math.min(1, dx / screen.offsetWidth));
+      m.p = 1 - Math.min(0.74, dx / m.W * 0.92);
+      m.ox = dx * 0.2;
+      m.oy = my * 0.16;
+      paintMorph(m);
     }, { passive: false });
-    function end() {
+    function end(e) {
       if (!tracking) return;
       tracking = false;
-      if (!locked || !screen) { cleanup(); return; }
-      var w = screen.offsetWidth;
-      var leave = dx > w * 0.4 || speed > 0.5;
-      screen.classList.remove('is-dragging');
-      screen.classList.add(leave ? 'is-leaving' : 'is-settling');
-      under.classList.add(leave ? 'is-leaving' : 'is-settling');
-      paint(leave ? 1 : 0);
-      setTimeout(function () {
-        var wasLeaving = leave;
-        cleanup();
-        if (wasLeaving) pop(true);
-        else appEl.classList.remove('instant');
-      }, 270);
+      var m = morph;
+      if (!locked || !m) return;
+      // A finger that stopped before lifting isn't a flick.
+      if (e.timeStamp - lastT > 90) speed = 0;
+      m.v = -speed * 1000 / m.W * 0.92;
+      if (dx > m.W * 0.3 || (speed > 0.45 && dx > 30)) {
+        closeTop({ viaDrag: true });
+      } else {
+        m.dragging = false;
+        m.to = 1;
+        runMorph();
+      }
     }
     document.addEventListener('touchend', end);
     document.addEventListener('touchcancel', end);
@@ -417,7 +823,7 @@
   function renderOverview(el) {
     var s = G.summarize(data);
     var addBtn = '<button class="icon-btn icon-btn-primary" data-act="quick-add" aria-label="Add a course"><svg><use href="#sym-plus"/></svg></button>';
-    var h = '<header class="topbar"><div class="brand"><svg class="brand-mark" aria-hidden="true"><use href="#sym-mark"/></svg><h1>Ace It</h1></div>' + addBtn + '</header>';
+    var h = '<header class="topbar"><div class="brand">' + brandMarkHTML() + '<h1>Ace It</h1></div>' + addBtn + '</header>';
 
     if (!data.terms.length) {
       h += '<div class="card">' + emptyHTML('terms', 'Add your first term', 'Start with the semester you’re in now, or the first one you finished. Then add its courses.', 'Add a term', 'add-term') + '</div>';
@@ -428,14 +834,14 @@
     // Hero: the cumulative average
     h += '<section class="hero">';
     if (s.official != null) {
-      h += '<div class="hero-label">Cumulative average</div><div class="hero-value">' + G.fmtAvg(s.official) + '</div>' +
+      h += '<div class="hero-label">Cumulative average</div><div class="hero-value">' + avgHTML('cum', s.official) + '</div>' +
         '<div class="hero-sub">Official · ' + plural(s.officialCount, 'finished course') + '</div>';
       if (s.remaining > 0) {
-        h += '<div class="hero-split"><div><div class="hero-label">Projected</div><div class="hero-small">' + G.fmtAvg(s.projected) + '</div></div>' +
-          '<div><div class="hero-label">Possible range</div><div class="hero-small">' + G.fmtAvg(s.worst) + '–' + G.fmtAvg(s.best) + '</div></div></div>';
+        h += '<div class="hero-split"><div><div class="hero-label">Projected</div><div class="hero-small">' + avgHTML('proj', s.projected) + '</div></div>' +
+          '<div><div class="hero-label">Possible range</div><div class="hero-small">' + avgHTML('lo', s.worst) + '–' + avgHTML('hi', s.best) + '</div></div></div>';
       }
     } else if (s.projected != null) {
-      h += '<div class="hero-label">Projected average</div><div class="hero-value">' + G.fmtAvg(s.projected) + '</div>' +
+      h += '<div class="hero-label">Projected average</div><div class="hero-value">' + avgHTML('proj', s.projected) + '</div>' +
         '<div class="hero-sub">No finished courses yet · ' + plural(s.inProgress, 'course') + ' in progress</div>';
     } else {
       h += '<div class="hero-label">Cumulative average</div><div class="hero-empty">No grades yet</div>' +
@@ -450,34 +856,19 @@
       if (parts.length) h += tipHTML('projected', 'Projected: ' + esc(parts.join(', ')) + '.', 'overview');
     }
     if (s.inProgress > 0 || s.future > 0) {
-      h += '<button class="btn btn-block whatif-open" data-act="open-whatif">' + icon('target') + 'What if…<small>Try grades and see your average</small></button>';
+      h += '<button class="btn btn-block whatif-open" data-act="open-whatif" data-morph-id="whatif">' + icon('target') + 'What if…<small>Try grades and see your average</small></button>';
     }
 
     h += comingUpHTML();
 
-    // Tiers
+    // Goals: one gauge
     if (s.tiers.length) {
-      h += '<section class="card card-flush"><div class="card-head"><h3>Goals' + (s.remaining > 0 ? '<span class="cat-weight">' + plural(s.remaining, 'course') + ' left</span>' : '') + '</h3><button class="text-btn text-btn-sm" data-act="edit-tiers">Edit</button></div>';
-      s.tiers.forEach(function (tier) {
-        var st = TIER_STATUS[tier.status] || TIER_STATUS.out;
-        var detail = '';
-        if (tier.status === 'none') detail = 'Add courses to see where you stand.';
-        else if (tier.remaining === 0) detail = tier.status === 'secured' ? 'Every course is finished.' : 'Finished below this goal.';
-        else if (tier.neededAverage <= 0) detail = 'Held whatever happens.';
-        else if (tier.neededAverage > 10 + 1e-9) detail = 'Needs more than a 10 average.';
-        else {
-          detail = 'Needs <b class="num">' + ceil2(tier.neededAverage) + '</b>';
-          if (tier.ninesAffordable === tier.remaining) detail += ' · all 9s would do';
-          else if (tier.ninesAffordable === 0) detail += ' · all 10s';
-          else if (tier.ninesAffordable != null) detail += ' · room for ' + (tier.ninesAffordable === 1 ? 'one 9' : tier.ninesAffordable + ' 9s');
-        }
-        h += '<div class="tier"><div class="tier-top"><span class="tier-name">' + esc(tier.name) + '<span class="num">' + G.fmtNum(tier.target) + '</span></span>' +
-          '<span class="chip ' + (st.kind ? 'chip-' + st.kind : '') + '">' + st.label + '</span></div><div class="tier-detail">' + detail + '</div></div>';
-      });
+      h += '<section class="card goals-card"><div class="card-head"><h3>Goals' + (s.remaining > 0 ? '<span class="cat-weight">' + plural(s.remaining, 'course') + ' left</span>' : '') + '</h3><button class="text-btn text-btn-sm" data-act="edit-tiers">Edit</button></div>' +
+        gaugeHTML(s, false);
       var note = s.totalCourses
         ? 'Out of ' + s.totalCourses + ' courses: ' + s.officialCount + ' finished, ' + s.inProgress + ' in progress, ' + s.future + ' still to take.'
         : 'Based on the ' + plural(s.denominator, 'course') + ' you’ve added. Set your degree’s total courses in Settings to plan the whole degree.';
-      h += tipHTML('goal-basis', esc(note), 'overview') + '</section>';
+      h += (s.remaining > 0 && s.denominator ? tipHTML('gauge', 'Shaded: where you can still finish. Hollow dot: projected.', 'overview') : '') + tipHTML('goal-basis', esc(note), 'overview') + '</section>';
     }
 
     // In progress
@@ -491,6 +882,105 @@
     }
 
     el.innerHTML = h;
+  }
+
+  // ================================================================
+  // Goal gauge: your average as a marker on a track, with a line for every goal
+  // ================================================================
+
+  var GOAL_ICON = {
+    secured: '<svg viewBox="0 0 14 14"><circle cx="7" cy="7" r="7" class="gg-fill"/><path d="M3.9 7.3l2.1 2.1 4.1-4.4" class="gg-on"/></svg>',
+    track: '<svg viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" class="gg-ring"/><path d="M4.2 7.3l1.9 1.9 3.7-4" class="gg-mark"/></svg>',
+    reachable: '<svg viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" class="gg-ring"/><path d="M7 9.8V4.4M4.7 6.5L7 4.2l2.3 2.3" class="gg-mark"/></svg>',
+    out: '<svg viewBox="0 0 14 14"><circle cx="7" cy="7" r="6" class="gg-ring"/><path d="M4.4 7h5.2" class="gg-mark"/></svg>'
+  };
+  function goalGlyph(kind, label) {
+    return '<span class="goal-glyph is-' + kind + '" role="img" aria-label="' + esc(label) + '">' + (GOAL_ICON[kind] || GOAL_ICON.out) + '</span>';
+  }
+  function ninesText(tier) {
+    if (tier.ninesAffordable == null) return '';
+    if (tier.ninesAffordable === tier.remaining) return ' · all 9s ok';
+    if (tier.ninesAffordable === 0) return ' · all 10s';
+    return ' · ' + (tier.ninesAffordable === 1 ? 'one 9' : tier.ninesAffordable + ' nines') + ' ok';
+  }
+
+  // whatIf: the sandbox's numbers, where every course in progress already has its tried final.
+  function gaugeHTML(s, whatIf) {
+    var tiers = s.tiers.slice().sort(function (a, b) { return a.target - b.target; });
+    var now = isNum(s.official) ? s.official : null;
+    var proj = s.remaining > 0 && isNum(s.projected) ? s.projected : null;
+    var vals = tiers.map(function (t) { return t.target; });
+    if (now !== null) vals.push(now);
+    if (proj !== null) vals.push(proj);
+    var hi = 10;
+    var lo = Math.max(0, Math.min(9, Math.min.apply(null, vals) - 0.15));
+    var x = function (v) { return +(clamp01((v - lo) / (hi - lo)) * 100).toFixed(2); };
+
+    var info = tiers.map(function (tier) {
+      var st = TIER_STATUS[tier.status] || TIER_STATUS.out;
+      var kind = tier.status === 'none' ? 'out' : tier.status;
+      var label = st.label, need = '';
+      if (whatIf && tier.remaining === 0 && tier.status !== 'none') {
+        var gap = tier.target * s.denominator - s.officialSum;
+        var pts = Math.ceil(gap - 1e-9);
+        label = gap <= 1e-9 ? 'Reached' : 'Not reached';
+        if (gap > 1e-9) { kind = 'reachable'; need = 'short by <b class="num">' + pts + '</b> ' + (pts === 1 ? 'point' : 'points'); }
+      } else if ((tier.status === 'track' || tier.status === 'reachable') && tier.remaining > 0 && tier.neededAverage > 0 && tier.neededAverage <= 10 + 1e-9) {
+        need = (whatIf ? 'then needs ' : 'needs ') + '<b class="num">' + ceil2(tier.neededAverage) + '</b>' + ninesText(tier);
+      }
+      return { tier: tier, kind: kind, label: label, need: need, x: x(tier.target) };
+    });
+
+    var tipParts = [];
+    if (now !== null) tipParts.push((whatIf ? 'What-if ' : 'Now ') + G.fmtAvg(now));
+    if (proj !== null) tipParts.push('projected ' + G.fmtAvg(proj));
+    if (s.remaining > 0 && isNum(s.worst) && isNum(s.best)) tipParts.push('can finish ' + G.fmtAvg(s.worst) + '–' + G.fmtAvg(s.best));
+
+    var h = '<div class="gauge chart' + (whatIf ? ' is-whatif' : '') + '"><div class="g-plot"' + (tipParts.length ? ' data-tip="' + esc(tipParts.join(' · ')) + '"' : '') + '><div class="g-track"></div>';
+    if (s.remaining > 0 && isNum(s.worst) && isNum(s.best)) {
+      var bl = x(Math.max(lo, s.worst)), bw = +(x(s.best) - bl).toFixed(2);
+      h += '<div class="g-band' + (s.worst < lo - 1e-9 ? ' is-cut' : '') + '" data-slide="band" data-l="' + bl + '" data-w="' + bw + '" style="left:' + bl + '%;width:' + bw + '%"></div>';
+    }
+    info.forEach(function (g) { h += '<i class="g-tick" style="left:' + g.x + '%"></i>'; });
+    if (proj !== null) h += '<div class="g-dot g-proj" data-slide="proj" data-l="' + x(proj) + '" style="left:' + x(proj) + '%">' + (now === null ? '<b class="g-val num"' + countAttr('g-proj', proj) + '>' + G.fmtAvg(proj) + '</b>' : '') + '</div>';
+    if (now !== null) h += '<div class="g-dot g-now" data-slide="now" data-l="' + x(now) + '" style="left:' + x(now) + '%"><b class="g-val num"' + countAttr('g-now', now) + '>' + G.fmtAvg(now) + '</b></div>';
+    h += '</div><div class="g-axis">';
+    info.forEach(function (g) {
+      h += '<button type="button" class="g-lab" style="left:' + g.x + '%" data-state="goal:' + esc(g.tier.id) + '" data-s="' + g.kind + '" data-tip="' + esc(g.tier.name + ' ' + G.fmtNum(g.tier.target) + ' · ' + g.label) + '">' +
+        goalGlyph(g.kind, g.label) + '<b class="num">' + G.fmtNum(g.tier.target) + '</b><small>' + esc(g.tier.name.split(' ')[0].slice(0, 10)) + '</small></button>';
+    });
+    if (!tiers.some(function (t) { return t.target > 9.75; })) h += '<span class="g-end num">10</span>';
+    h += '</div>';
+
+    var rows = info.filter(function (g) { return g.need; });
+    if (rows.length) {
+      h += '<div class="goal-rows">' + rows.map(function (g) {
+        return '<div class="goal-row">' + goalGlyph(g.kind, g.label) + '<span class="goal-name">' + esc(g.tier.name) + '</span><span class="goal-target num">' + G.fmtNum(g.tier.target) + '</span><span class="goal-need">' + g.need + '</span></div>';
+      }).join('') + '</div>';
+    }
+    if (!s.denominator) h += '<p class="hint">Add courses to see where you stand.</p>';
+    h += '<div class="sr-only"><table><caption>Goals</caption><tr><th>Goal</th><th>Target</th><th>Status</th><th>Needs</th></tr>' + info.map(function (g) {
+      return '<tr><td>' + esc(g.tier.name) + '</td><td>' + G.fmtNum(g.tier.target) + '</td><td>' + g.label + '</td><td>' + (g.need ? g.need.replace(/<[^>]+>/g, '') : '–') + '</td></tr>';
+    }).join('') + '</table></div></div>';
+    return h;
+  }
+
+  // Goal labels that would run into each other drop to a second line.
+  function layoutGauges(root) {
+    root.querySelectorAll('.g-axis').forEach(function (axis) {
+      var rightEdge = [-1e9, -1e9], anyLow = false;
+      Array.prototype.forEach.call(axis.querySelectorAll('.g-lab'), function (lab) {
+        lab.classList.remove('is-low');
+        var r = lab.getBoundingClientRect();
+        if (!r.width) return;
+        var low = r.left < rightEdge[0] + 4 && r.left >= rightEdge[1] + 4;
+        if (low) { lab.classList.add('is-low'); anyLow = true; }
+        rightEdge[low ? 1 : 0] = r.right;
+      });
+      axis.classList.toggle('has-low', anyLow);
+      var end = axis.querySelector('.g-end');
+      if (end) end.classList.toggle('hidden', end.getBoundingClientRect().left < Math.max(rightEdge[0], rightEdge[1]) + 4);
+    });
   }
 
   // ================================================================
@@ -554,7 +1044,7 @@
         var when = e.dd < 0
           ? '<span class="due-late">Was due ' + esc(formatDate(e.it.date)) + ' · enter the grade</span>'
           : '<span' + (e.dd <= 1 ? ' class="due-soon"' : '') + '>' + esc(relDay(e.it.date)) + '</span>';
-        h += '<button class="row" data-act="open-course" data-id="' + e.c.id + '"><span class="row-main"><span class="row-title">' + esc(e.it.name) + '</span>' +
+        h += '<button class="row" data-act="open-course" data-id="' + e.c.id + '" data-morph-id="u:' + e.it.id + '"><span class="row-main"><span class="row-title">' + esc(e.it.name) + '</span>' +
           '<span class="row-sub up-sub"><span>' + esc(e.c.name) + '</span>' + when + '</span></span>' +
           '<span class="row-end">' + upNeedHTML(e.c, e.it) + icon('chev', 'row-chev') + '</span></button>';
       });
@@ -627,8 +1117,8 @@
     var last = pts[pts.length - 1];
     svg += '<text class="c-val" x="' + x(pts.length - 1) + '" y="' + (y(last.value) - 11) + '" text-anchor="middle">' + G.fmtAvg(last.value) + '</text>';
     svg += '</svg>';
-    var table = '<table class="sr-only"><caption>Cumulative average after each term</caption><tr><th>Term</th><th>Cumulative</th><th>Term average</th></tr>' +
-      pts.map(function (p) { return '<tr><td>' + esc(p.full) + '</td><td>' + G.fmtAvg(p.value) + (p.projected ? ' (projected)' : '') + '</td><td>' + (isNum(p.termAvg) ? G.fmtAvg(p.termAvg) : '–') + '</td></tr>'; }).join('') + '</table>';
+    var table = '<div class="sr-only"><table><caption>Cumulative average after each term</caption><tr><th>Term</th><th>Cumulative</th><th>Term average</th></tr>' +
+      pts.map(function (p) { return '<tr><td>' + esc(p.full) + '</td><td>' + G.fmtAvg(p.value) + (p.projected ? ' (projected)' : '') + '</td><td>' + (isNum(p.termAvg) ? G.fmtAvg(p.termAvg) : '–') + '</td></tr>'; }).join('') + '</table></div>';
     return '<div class="chart">' + svg + table + '</div>';
   }
 
@@ -661,8 +1151,8 @@
       svg += '<text class="c-axis-label" x="' + cx + '" y="' + (H - 8) + '" text-anchor="middle">' + b.label + '</text>';
     });
     svg += '</svg>';
-    var table = '<table class="sr-only"><caption>Final grades of finished courses</caption><tr><th>Final</th><th>Courses</th></tr>' +
-      buckets.map(function (b) { return '<tr><td>' + b.label + '</td><td>' + b.names.length + (b.names.length ? ': ' + esc(b.names.join(', ')) : '') + '</td></tr>'; }).join('') + '</table>';
+    var table = '<div class="sr-only"><table><caption>Final grades of finished courses</caption><tr><th>Final</th><th>Courses</th></tr>' +
+      buckets.map(function (b) { return '<tr><td>' + b.label + '</td><td>' + b.names.length + (b.names.length ? ': ' + esc(b.names.join(', ')) : '') + '</td></tr>'; }).join('') + '</table></div>';
     return '<section class="card"><div class="card-head"><h3>Your final grades</h3><span class="card-note">' + plural(total, 'finished course') + '</span></div><div class="chart">' + svg + table + '</div>' +
       tipHTML('chart-cols', 'Tap a column to see which courses.', 'terms') + '</section>';
   }
@@ -718,9 +1208,9 @@
       sub.push(cs.length ? plural(cs.length, 'course') : 'No courses yet');
       if (t.planned && t.planned > cs.length) sub.push((t.planned - cs.length) + ' planned');
       var chips = (t.kind === 'summer' ? chip('Summer', 'accent') : '') + (inProg ? chip('In progress') : '');
-      h += '<button class="row" data-act="open-term" data-id="' + t.id + '"><span class="row-main"><span class="row-title">' + esc(termLabel(t)) + '</span>' +
+      h += '<button class="row" data-act="open-term" data-id="' + t.id + '" data-morph-id="t:' + t.id + '"><span class="row-main"><span class="row-title">' + esc(termLabel(t)) + '</span>' +
         '<span class="row-sub">' + sub.join(' · ') + chips + '</span></span>' +
-        '<span class="row-end"><span class="score num">' + (avg.average != null ? G.fmtAvg(avg.average) : '–') + '</span>' + icon('chev', 'row-chev') + '</span></button>';
+        '<span class="row-end"><span class="score num">' + (avg.average != null ? avgHTML('t:' + t.id, avg.average) : '–') + '</span>' + icon('chev', 'row-chev') + '</span></button>';
     });
     h += '</section>' + tipHTML('terms-avg', 'Averages are the mean of rounded final grades, shown for reference only.', 'terms');
     h += progressHTML();
@@ -734,7 +1224,7 @@
     h += '<div class="page-head"><h2>' + esc(termLabel(t)) + '</h2><p class="page-sub">' + esc([t.dates, t.kind === 'summer' ? 'Summer term' : ''].filter(Boolean).join(' · ') || ' ') + '</p></div>';
     if (avg.average != null) {
       h += '<div class="big-grade"><div class="big-label">' + (avg.official ? 'Term average' : 'Projected term average') + '</div>' +
-        '<div class="pair pair-lg"><span class="raw">' + G.fmtAvg(avg.average) + '</span></div></div>';
+        '<div class="pair pair-lg"><span class="raw"' + countAttr('tavg', avg.average) + '>' + G.fmtAvg(avg.average) + '</span></div></div>';
     }
     if (cs.length) {
       h += '<section class="card card-flush">' + cs.map(function (c) { return courseRowHTML(c, c.professor); }).join('') +
@@ -763,7 +1253,7 @@
 
     var label = isFinal(c) ? 'Final grade' : (r.estimate ? 'Estimate' : 'Expected final');
     h += '<div class="big-grade"><div class="big-label">' + label + '</div>' +
-      (isNum(r.raw) ? pairHTML(r.raw, t, 'pair-lg' + (r.estimate ? ' is-est' : '')) : '<div class="hero-empty" style="color:var(--ink-soft)">No grades yet</div>') + '</div>';
+      (isNum(r.raw) ? pairHTML(r.raw, t, 'pair-lg' + (r.estimate ? ' is-est' : '') + (isFinal(c) ? ' is-final' : ''), 'raw') : '<div class="hero-empty" style="color:var(--ink-soft)">No grades yet</div>') + '</div>';
     h += '<div class="chips">' + chip(ruleText(t) + (c.rounding.unconfirmed ? ' · unconfirmed' : ''), c.rounding.unconfirmed ? 'warn' : 'line') +
       (c.mode === 'weighted' && c.weightsUnconfirmed ? chip('Weights unconfirmed', 'warn') : '') +
       (r.estimate ? chip('Estimate', 'warn') : '') + (isFinal(c) ? chip('Final', 'good') : '') + (!c.counts ? chip('Not counted in average') : '') + '</div>';
@@ -804,7 +1294,7 @@
   function projBox(label, raw, t, note, act, cls) {
     var tag = act ? 'button' : 'div';
     return '<' + tag + ' class="proj ' + (cls || '') + '"' + (act ? ' data-act="' + act + '"' : '') + '><div class="proj-label">' + esc(label) + '</div>' +
-      '<div class="proj-val">' + pairHTML(raw, t) + '</div>' + (note ? '<div class="proj-note">' + note + '</div>' : '') + '</' + tag + '>';
+      '<div class="proj-val">' + pairHTML(raw, t, '', 'p:' + label) + '</div>' + (note ? '<div class="proj-note">' + note + '</div>' : '') + '</' + tag + '>';
   }
 
   function singleCardHTML(c, r, t) {
@@ -968,6 +1458,7 @@
     var w = whatIfSummary();
     if ($('wiResults')) $('wiResults').innerHTML = whatIfHeroHTML(w);
     if ($('wiGoals')) $('wiGoals').innerHTML = whatIfGoalsHTML(w);
+    react(topScreen());
     var title = document.querySelector('.screen.is-active .topbar-title');
     if (title) title.textContent = 'What if · ' + G.fmtAvg(w.value);
   }
@@ -977,7 +1468,7 @@
     var s = w.s, value = w.value;
     var before = real.projected;
     var h = '<section class="hero hero-whatif"><div class="hero-label">' + (s.future > 0 ? 'What-if average, whole degree' : 'What-if cumulative') + '</div>' +
-      '<div class="hero-value">' + G.fmtAvg(value) + '</div>';
+      '<div class="hero-value">' + avgHTML('wi', value) + '</div>';
     if (isNum(before) && isNum(value)) {
       var d = Math.round((value - before) * 100) / 100;
       var dTxt = Math.abs(d) < 0.005 ? 'same as now' : (d > 0 ? '+' : '−') + Math.abs(d).toFixed(2) + ' vs now';
@@ -988,34 +1479,8 @@
   }
 
   function whatIfGoalsHTML(w) {
-    var s = w.s, h = '';
-    if (s.tiers.length) {
-      h += '<section class="card card-flush"><div class="card-head"><h3>Goals</h3></div>';
-      s.tiers.forEach(function (tier) {
-        var st = TIER_STATUS[tier.status] || TIER_STATUS.out;
-        var detail;
-        if (tier.status === 'none') detail = 'Add courses to see where you’d stand.';
-        else if (tier.remaining === 0) {
-          var gap = tier.target * s.denominator - s.officialSum;
-          var pts = Math.ceil(gap - 1e-9);
-          detail = gap <= 1e-9 ? 'Reached with these grades.' : pts === 1 ? 'Short by 1 point: raise any one course by 1.' : 'Short by ' + pts + ' points: raise your courses by ' + pts + ' in total.';
-        } else {
-          var R = tier.remaining;
-          if (tier.neededAverage <= 0) detail = 'Held whatever happens in the ' + plural(R, 'course') + ' after these.';
-          else if (tier.neededAverage > 10 + 1e-9) detail = 'Would need more than a 10 average on the ' + plural(R, 'course') + ' after these.';
-          else {
-            detail = 'Then needs a <b class="num">' + ceil2(tier.neededAverage) + '</b> average on the ' + plural(R, 'course') + ' after these.';
-            if (tier.ninesAffordable === R) detail += ' Every one could be a 9.';
-            else if (tier.ninesAffordable === 0) detail += ' Every one needs a 10.';
-            else if (tier.ninesAffordable != null) detail += ' Room for ' + (tier.ninesAffordable === 1 ? 'one 9' : tier.ninesAffordable + ' 9s') + '.';
-          }
-        }
-        h += '<div class="tier"><div class="tier-top"><span class="tier-name">' + esc(tier.name) + '<span class="num">' + G.fmtNum(tier.target) + '</span></span>' +
-          '<span class="chip ' + (st.kind ? 'chip-' + st.kind : '') + '">' + (tier.status === 'secured' && tier.remaining === 0 ? 'Reached' : tier.status === 'out' && tier.remaining === 0 ? 'Not reached' : st.label) + '</span></div><div class="tier-detail">' + detail + '</div></div>';
-      });
-      h += '</section>';
-    }
-    return h;
+    if (!w.s.tiers.length) return '';
+    return '<section class="card goals-card"><div class="card-head"><h3>Goals</h3></div>' + gaugeHTML(w.s, true) + '</section>';
   }
 
   function renderWhatIf(el, backLabel) {
@@ -1090,7 +1555,7 @@
       '<div class="settings-row" style="cursor:default"><span class="row-main"><b>Storage</b><small id="persistStatus">Checking…</small></span></div>' +
       '</section>';
     h += '<div class="danger-zone"><button class="text-btn text-btn-danger" data-act="erase-all">Erase all data</button></div>';
-    h += '<div class="about"><svg class="brand-mark" aria-hidden="true"><use href="#sym-mark"/></svg><p><b>Ace It</b> keeps your grades on this iPhone only. No account, no cloud.</p>' +
+    h += '<div class="about"><svg class="brand-mark" viewBox="0 0 48 48" aria-hidden="true">' + MARK_PATHS + '</svg><p><b>Ace It</b> keeps your grades on this iPhone only. No account, no cloud.</p>' +
       '<p class="about-version">Version ' + APP_VERSION + ' · data format ' + S.SCHEMA_VERSION + '</p></div>';
     el.innerHTML = h;
     S.persistenceStatus().then(function (p) {
@@ -1110,6 +1575,7 @@
   // ================================================================
 
   function openSheet(html, setup) {
+    hideImpact();
     var bd = document.createElement('div');
     bd.className = 'sheet-backdrop';
     bd.innerHTML = '<div class="sheet" role="dialog" aria-modal="true"><div class="sheet-handle"></div>' + html + '</div>';
@@ -1207,7 +1673,7 @@
           data.courses = data.courses.filter(function (c) { return c.termId !== term.id; });
           data.terms = data.terms.filter(function (x) { return x.id !== term.id; });
           closeSheet(bd);
-          commit();
+          commit(termLabel(term) + ' deleted');
         });
       };
       bd._acts.save = function () {
@@ -1395,8 +1861,7 @@
           };
           data.courses.push(done);
           closeSheet(bd);
-          commit();
-          showToast('Added ' + name + ' · ' + (Math.round(fin) === fin ? fin : G.fmtRaw(fin, threshold) + ' → ' + G.roundFinal(fin, threshold)));
+          commit(name + (Math.round(fin) === fin ? '' : ' · ' + G.fmtRaw(fin, threshold)));
           if (another) setTimeout(function () { courseSheet(null, termPick, { finished: true }); }, 250);
           return;
         }
@@ -1519,7 +1984,7 @@
         c.weightsUnconfirmed = unconfirmed;
         c.altWeights = Object.keys(alt).length ? alt : null;
         closeSheet(bd);
-        commit();
+        commit('Weights');
       };
       draw();
     });
@@ -1618,7 +2083,7 @@
         if (found && newCat !== found.cat) found.cat.items = found.cat.items.filter(function (x) { return x !== target; });
         if (!found || newCat !== found.cat) newCat.items.push(target);
         closeSheet(bd);
-        commit();
+        commit(name + ' · ' + (status === 'pending' ? 'pending' : isNum(target.max) ? G.fmtNum(target.points, 4) + '/' + G.fmtNum(target.max, 4) : G.fmtNum(target.score, 4)));
         if (another) setTimeout(function () { itemSheet(c, null, newCat.id); }, 200);
       }
       bd._acts.save = function () { save(false); };
@@ -1628,7 +2093,7 @@
         confirmSheet('Delete ' + it.name + '?', 'There’s no undo.', 'Delete', function () {
           found.cat.items = found.cat.items.filter(function (x) { return x !== it; });
           closeSheet(bd);
-          commit();
+          commit(it.name + ' removed');
         });
       };
     });
@@ -1653,7 +2118,7 @@
       adjEditorHTML(adj) + '<div class="sheet-actions"><button class="btn" data-act="cancel">Cancel</button><button class="btn btn-primary" data-act="save">Save</button></div>', function (bd) {
       wireAdjEditor(bd, adj);
       bd._acts.cancel = function () { closeSheet(bd); };
-      bd._acts.save = function () { c.adjustments = cleanAdj(adj); closeSheet(bd); commit(); };
+      bd._acts.save = function () { c.adjustments = cleanAdj(adj); closeSheet(bd); commit('Adjustments'); };
     });
   }
 
@@ -1675,7 +2140,7 @@
           if (v === null || isNaN(v) || v < 0 || v > 10) { setErr(bd, 'Enter a grade from 0 to 10.'); return; }
           c.expectedPending = v;
         } else c.expectedPending = null;
-        closeSheet(bd); commit();
+        closeSheet(bd); commit('Expected case');
       };
     });
   }
@@ -1866,7 +2331,7 @@
     var progress = function (n) { return '<div class="setup-progress">' + [1, 2, 3].map(function (i) { return '<i class="' + (i <= n ? 'is-on' : '') + '"></i>'; }).join('') + '</div>'; };
     var h = '<div class="setup-inner">';
     if (s.step === 0) {
-      h += '<div class="setup-mark"><svg aria-hidden="true"><use href="#sym-mark"/></svg></div>' +
+      h += '<div class="setup-mark"><svg class="brand-draw is-intro" viewBox="0 0 48 48" aria-hidden="true">' + MARK_PATHS + '</svg></div>' +
         '<h2>Every grade,<br>one clear average.</h2>' +
         '<p class="setup-lede">Ace It predicts your final grades, tells you what you need on what’s left, and tracks your cumulative average across your whole degree.</p>' +
         '<div class="setup-foot"><button class="btn btn-primary btn-lg btn-block" data-act="setup-next">Start from scratch</button>' +
@@ -1937,21 +2402,21 @@
   }
 
   var ACTIONS = {
-    back: function () { pop(false); },
-    'open-term': function (el) { push('term', el.dataset.id); },
-    'open-course': function (el) { push('course', el.dataset.id); },
+    back: function () { closeTop(); },
+    'open-term': function (el) { push('term', el.dataset.id, el); },
+    'open-course': function (el) { push('course', el.dataset.id, el); },
     'toggle-upcoming': function () { ui.showAllUpcoming = !ui.showAllUpcoming; renderTab('overview'); },
-    'open-whatif': function () { startWhatIf(); push('whatif', 'sandbox'); },
+    'open-whatif': function (el) { startWhatIf(); push('whatif', 'sandbox', el); },
     'wi-pick': function (el) {
       if (!ui.whatIf) return;
       ui.whatIf.finals[el.dataset.id] = +el.dataset.val;
       var top = ui.stack[ui.stack.length - 1];
-      if (top && top.type === 'whatif') renderWhatIf(top.el, backLabelFor(ui.stack.length - 1));
+      if (top && top.type === 'whatif') { renderWhatIf(top.el, backLabelFor(ui.stack.length - 1)); react(top.el); }
     },
     'wi-reset': function () {
       startWhatIf();
       var top = ui.stack[ui.stack.length - 1];
-      if (top && top.type === 'whatif') renderWhatIf(top.el, backLabelFor(ui.stack.length - 1));
+      if (top && top.type === 'whatif') { renderWhatIf(top.el, backLabelFor(ui.stack.length - 1)); react(top.el); }
       showToast('Back to your expected grades.');
     },
     'add-term': function () { termSheet(null); },
@@ -1973,13 +2438,13 @@
     'edit-posted': function () {
       var c = currentCourse(); if (!c) return;
       numberSheet({ title: 'Official final grade', text: 'Once the school posts the grade, enter it here (as posted, e.g. 9 or 9.47). It replaces the calculation and marks the course finished.', value: c.posted, min: 0, max: 10, allowEmpty: true, clearLabel: 'Remove',
-        onSave: function (v) { c.posted = v; if (v !== null) c.done = true; commit(); } });
+        onSave: function (v) { c.posted = v; if (v !== null) c.done = true; commit(v !== null ? 'Official grade · ' + G.fmtNum(v, 4) : 'Official grade removed'); } });
     },
     'delete-course': function () {
       var c = currentCourse(); if (!c) return;
       confirmSheet('Delete ' + c.name + '?', 'All its categories and grades go too. There’s no undo.', 'Delete', function () {
         data.courses = data.courses.filter(function (x) { return x !== c; });
-        commit();
+        commit(c.name + ' deleted');
       });
     },
     'edit-tiers': tiersSheet,
@@ -2021,16 +2486,22 @@
     'default-rule': function (v) { data.settings.defaultThreshold = +v; persist(); },
     'course-tab': function (v, group) {
       var screen = group.closest('.screen');
+      var was = screen._courseTab || 'grades';
       screen._courseTab = v;
-      screen.querySelectorAll('.course-pane').forEach(function (p) { p.classList.toggle('hidden', p.dataset.pane !== v); });
+      screen.querySelectorAll('.course-pane').forEach(function (p) {
+        var on = p.dataset.pane === v;
+        p.classList.toggle('hidden', !on);
+        p.classList.remove('pane-next', 'pane-prev');
+        if (on && was !== v) { void p.offsetWidth; p.classList.add(v === 'forecast' ? 'pane-next' : 'pane-prev'); }
+      });
     }
   };
   var SWITCHES = {
     'course-done': function (on) {
       var c = currentCourse(); if (!c) return;
       c.done = on;
-      if (!on && isNum(c.posted)) { c.posted = null; showToast('Official grade removed.'); }
-      commit();
+      if (!on && isNum(c.posted)) c.posted = null;
+      commit(on ? 'Marked finished' : 'Back in progress');
     }
   };
 
@@ -2078,6 +2549,7 @@
   function showToast(text, opts) {
     opts = opts || {};
     var t = $('toast'), a = $('toastAction');
+    hideImpact();
     $('toastText').textContent = text;
     a.classList.toggle('hidden', !opts.action);
     if (opts.action) { a.textContent = opts.action; a.onclick = function () { hideToast(); opts.onAction(); }; }
@@ -2140,7 +2612,7 @@
   setTimeout(maybeNudgeBackup, 1600);
 
   // Debug/test hook (no data leaves the page).
-  window.__aceit = { get data() { return data; }, renderAll: renderAll, push: push, pop: pop };
+  window.__aceit = { get data() { return data; }, renderAll: renderAll, push: push, pop: closeTop, commit: commit, get morph() { return morph; } };
 
   if ('serviceWorker' in navigator) {
     // When a new version takes over, reload once so it's used right away
