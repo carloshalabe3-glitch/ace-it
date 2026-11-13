@@ -3,7 +3,7 @@
 
   var G = window.Grades;
   var S = window.Store;
-  var APP_VERSION = '1.1';
+  var APP_VERSION = '1.2';
 
   var data = S.load();
 
@@ -2035,7 +2035,8 @@
       (c.categories.length > 1 ? '<div class="field"><label for="iCat">Category</label><select id="iCat">' + c.categories.map(function (g) { return '<option value="' + g.id + '"' + (g.id === cat.id ? ' selected' : '') + '>' + esc(g.name) + ' (' + G.fmtNum(g.weight) + '%)</option>'; }).join('') + '</select></div>' : '') +
       '<div class="field">' + segHTML('i-status', [{ val: 'graded', label: 'Graded' }, { val: 'pending', label: 'Pending' }], status) + '</div>' +
       '<div class="field" id="scoreField"><label for="iScore">Grade</label><input type="text" id="iScore" inputmode="decimal" autocomplete="off" placeholder="8.9 or 17/20" value="' + esc(scoreText) + '"><p class="field-hint" id="scoreHint">Out of 10, or as points like 17/20.</p></div>' +
-      '<div class="field"><label for="iDate">Date <span class="opt">optional</span></label><input type="date" id="iDate" value="' + (it.date || '') + '"></div>' +
+      '<div class="field"><label for="iDate">Date <span class="opt">optional</span></label><input type="date" id="iDate" value="' + (it.date || '') + '">' +
+      '<button type="button" class="cal-add hidden" id="iCal" data-act="add-cal">' + icon('calplus') + 'Add to Calendar</button></div>' +
       moreToggleHTML('i-more', '', moreOpen) +
       '<div id="iMore"' + (moreOpen ? '' : ' class="hidden"') + '>' +
       '<div class="field"><label for="iWeight">Custom weight % <span class="opt">optional</span></label><input type="text" id="iWeight" inputmode="decimal" placeholder="' + esc(share) + '" value="' + (isNum(it.weight) ? it.weight : '') + '">' +
@@ -2048,6 +2049,8 @@
     openSheet(html, function (bd) {
       function sync() {
         q(bd, '#scoreField').classList.toggle('hidden', status !== 'graded');
+        // Something still to come, with a day set: it can go on the phone's calendar.
+        q(bd, '#iCal').classList.toggle('hidden', status !== 'pending' || !val(bd, '#iDate'));
       }
       function preview() {
         var p = G.parseScore(val(bd, '#iScore'));
@@ -2058,10 +2061,13 @@
       bd._acts['i-more'] = function (btn) { toggleMore(btn, q(bd, '#iMore')); };
       bd._segs['i-status'] = function (v) { status = v; sync(); };
       q(bd, '#iScore').addEventListener('input', preview);
+      q(bd, '#iDate').addEventListener('input', sync);
+      q(bd, '#iDate').addEventListener('change', sync);
       sync(); preview();
       wireAdjEditor(bd, adj);
       if (isNew) setTimeout(function () { q(bd, '#iName').focus(); }, 350);
-      function save(another) {
+      // toCalendar: save as usual, then hand the saved item to the phone's calendar.
+      function save(another, toCalendar) {
         var name = val(bd, '#iName').trim() || q(bd, '#iName').placeholder;
         var parsed = null;
         if (status === 'graded') {
@@ -2085,8 +2091,10 @@
         closeSheet(bd);
         commit(name + ' · ' + (status === 'pending' ? 'pending' : isNum(target.max) ? G.fmtNum(target.points, 4) + '/' + G.fmtNum(target.max, 4) : G.fmtNum(target.score, 4)));
         if (another) setTimeout(function () { itemSheet(c, null, newCat.id); }, 200);
+        if (toCalendar) addToCalendar(c, target);
       }
       bd._acts.save = function () { save(false); };
+      bd._acts['add-cal'] = function () { save(false, true); };
       bd._acts['save-another'] = function () { save(true); };
       bd._acts.cancel = function () { closeSheet(bd); };
       bd._acts['delete'] = function () {
@@ -2107,6 +2115,79 @@
   function suggestName(cat) {
     var base = cat.name.replace(/s$/i, '').split(/[+\/]/)[0].trim() || 'Item';
     return base + ' ' + (cat.items.length + 1);
+  }
+
+  // ---------- add to calendar ----------
+  // One all-day event on the item's date, made on the phone: nothing is sent anywhere.
+
+  function calendarFile(c, it) {
+    var r = result(c);
+    var lines = [];
+    r.pendingSlots.forEach(function (sl) { if (sl.item === it) lines.push('Worth ' + fmtW(sl.w) + ' of ' + c.name + '.'); });
+    // What it needed on the day it was added: a snapshot, the calendar won't follow later grades.
+    var F = r.expectedFinal;
+    if (isNum(F)) {
+      var opts = { assumed: assumed() };
+      var keep = G.neededOnItem(c, it.id, F, opts);
+      var needs = [];
+      if (keep.status === 'needed') needs.push('needs ' + ceil2(keep.score) + ' to keep your ' + F);
+      else if (keep.status === 'secured') needs.push('your ' + F + ' is safe');
+      if (F < 10) {
+        var up = G.neededOnItem(c, it.id, F + 1, opts);
+        if (up.status === 'needed') needs.push(ceil2(up.score) + ' for ' + (F + 1 === 8 ? 'an ' : 'a ') + (F + 1));
+      }
+      if (needs.length) lines.push('When added: ' + needs.join(', ') + '.');
+    }
+    return Ics.eventFile({ uid: it.id + '@ace-it', date: it.date, summary: it.name + ' · ' + c.name, description: lines.join('\n') });
+  }
+
+  var CALENDAR_CACHE = 'ace-it-calendar';        // the same name as in sw.js
+  var CALENDAR_PATH = 'calendar/ace-it-event.ics';
+  function isApplePhone() {
+    return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  }
+
+  function addToCalendar(c, it) {
+    var text = it && it.date ? calendarFile(c, it) : null;
+    if (!text) return;
+    var name = Ics.fileName(it.name);
+    var blob = new Blob([text], { type: 'text/calendar;charset=utf-8' });
+    function download() {
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+      showToast('Calendar file saved. Open it to add the event.');
+    }
+    function share() {
+      var file = null;
+      try { file = new File([blob], name, { type: 'text/calendar' }); } catch (e) {}
+      if (!file || !navigator.canShare || !navigator.canShare({ files: [file] })) return false;
+      navigator.share({ files: [file] }).catch(function (err) { if (err && err.name !== 'AbortError') download(); });
+      return true;
+    }
+    if (!isApplePhone()) { download(); return; }
+    // The iPhone only offers "Add to Calendar" for an event it opens as a web address, not
+    // for a file made in the page. So the event goes into the app's own offline cache and
+    // the app opens it from there; the service worker answers without touching the network.
+    var sw = navigator.serviceWorker;
+    if (sw && sw.controller && window.caches) {
+      var address = new URL(CALENDAR_PATH, location.href).href;
+      caches.open(CALENDAR_CACHE).then(function (cache) {
+        return cache.put(address, new Response(blob, { headers: {
+          'Content-Type': 'text/calendar; charset=utf-8',
+          'Content-Disposition': 'inline; filename="' + name + '"',
+          'Cache-Control': 'no-store'
+        } }));
+      }).then(function () {
+        location.href = CALENDAR_PATH + '?t=' + Date.now();
+      }, function () {
+        if (!share()) download();
+      });
+      return;
+    }
+    if (!share()) download();
   }
 
   // ---------- course adjustments, expected, posted ----------

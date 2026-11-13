@@ -851,6 +851,18 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
 .more-toggle span + .row-chev { margin-left: auto; }
 .more-toggle.is-open .row-chev { transform: rotate(90deg); }
 
+/* "Add to Calendar", under the date of something still pending. */
+.cal-add {
+  display: inline-flex; align-items: center; gap: 0.4rem;
+  margin-top: 0.6rem; min-height: 38px; padding: 0.4rem 0.9rem 0.4rem 0.7rem;
+  border: none; border-radius: 999px;
+  background: var(--accent-tint); color: var(--accent-deep);
+  font-size: 0.92rem; font-weight: 600;
+  transition: transform var(--spring-out), background var(--t-fast);
+}
+.cal-add:active { transform: scale(0.95); transition-duration: var(--press-in); }
+.cal-add svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+
 /* Grades | Forecast: the pane you pick slides in from its side. */
 .course-pane.pane-next { animation: paneNext var(--t-snappy) var(--spring-snappy) backwards; }
 .course-pane.pane-prev { animation: panePrev var(--t-snappy) var(--spring-snappy) backwards; }

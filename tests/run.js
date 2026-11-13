@@ -254,6 +254,57 @@ test('backup round trip', function () {
   eq(bad, true);
 });
 
+console.log('Calendar file');
+var Ics = require('../ics.js');
+function icsEvent(extra) {
+  var o = { uid: 'i_test1@ace-it', date: '2026-11-20', summary: 'Exam 3 · Statistics', description: 'Worth 30% of Statistics.\nWhen added: needs 9.34 to keep your 10.', now: new Date(Date.UTC(2026, 10, 13, 15, 4, 5)) };
+  for (var k in extra) o[k] = extra[k];
+  return Ics.eventFile(o);
+}
+test('one all-day event on the item\'s date, ending the next day', function () {
+  var text = icsEvent();
+  var lines = text.split('\r\n');
+  eq(lines[0], 'BEGIN:VCALENDAR'); eq(lines[lines.length - 2], 'END:VCALENDAR'); eq(lines[lines.length - 1], '');
+  eq(text.indexOf('\n') > -1 && text.replace(/\r\n/g, '').indexOf('\n'), -1, 'every line ends in CRLF');
+  eq(lines.indexOf('DTSTART;VALUE=DATE:20261120') > -1, true);
+  eq(lines.indexOf('DTEND;VALUE=DATE:20261121') > -1, true);
+  eq(lines.indexOf('DTSTAMP:20261113T150405Z') > -1, true);
+  eq(lines.indexOf('SUMMARY:Exam 3 · Statistics') > -1, true);
+  eq((text.match(/BEGIN:VEVENT/g) || []).length, 1);
+});
+test('the end date rolls over months, years and leap days', function () {
+  eq(icsEvent({ date: '2026-11-30' }).indexOf('DTEND;VALUE=DATE:20261201') > -1, true);
+  eq(icsEvent({ date: '2026-12-31' }).indexOf('DTEND;VALUE=DATE:20270101') > -1, true);
+  eq(icsEvent({ date: '2028-02-28' }).indexOf('DTEND;VALUE=DATE:20280229') > -1, true);
+  eq(icsEvent({ date: '2027-02-28' }).indexOf('DTEND;VALUE=DATE:20270301') > -1, true);
+});
+test('a reminder at 9:00 the morning before', function () {
+  var text = icsEvent();
+  eq(text.indexOf('BEGIN:VALARM\r\nACTION:DISPLAY\r\n') > -1, true);
+  eq(text.indexOf('TRIGGER:-PT15H\r\nEND:VALARM') > -1, true);
+});
+test('the same item keeps its id, and a later file outranks an earlier one', function () {
+  var a = icsEvent(), b = icsEvent({ now: new Date(Date.UTC(2026, 10, 14, 9, 0, 0)), date: '2026-11-22' });
+  eq(a.match(/UID:(.*)\r\n/)[1], 'i_test1@ace-it');
+  eq(a.match(/UID:(.*)\r\n/)[1], b.match(/UID:(.*)\r\n/)[1]);
+  eq(+b.match(/SEQUENCE:(\d+)/)[1] > +a.match(/SEQUENCE:(\d+)/)[1], true);
+});
+test('text is escaped and long lines are folded at 75 bytes without splitting a character', function () {
+  eq(Ics.escapeText('a, b; c\\d\ne'), 'a\\, b\\; c\\\\d\\ne');
+  var text = icsEvent({ summary: 'Examen final de Historia del Arte: barroco, rococó; y más · Diseño gráfico 📚📚📚📚📚📚' });
+  text.split('\r\n').forEach(function (line) {
+    if (Buffer.byteLength(line, 'utf8') > 75) throw new Error('line too long: ' + line);
+  });
+  var unfolded = text.replace(/\r\n /g, '');
+  eq(unfolded.indexOf('SUMMARY:Examen final de Historia del Arte: barroco\\, rococó\\; y más · Diseño gráfico 📚📚📚📚📚📚\r\n') > -1, true);
+  eq(icsEvent().replace(/\r\n /g, '').indexOf('DESCRIPTION:Worth 30% of Statistics.\\nWhen added: needs 9.34 to keep your 10.\r\n') > -1, true);
+});
+test('no file without a real date, a name or an id', function () {
+  eq(icsEvent({ date: null }), null); eq(icsEvent({ date: '20/11/2026' }), null);
+  eq(icsEvent({ summary: '' }), null); eq(icsEvent({ uid: '' }), null);
+  eq(Ics.fileName('Exam 3'), 'exam-3.ics'); eq(Ics.fileName('¿?'), 'event.ics');
+});
+
 var privateTests = path.join(__dirname, '..', '..', 'ace-it-private', 'seed.test.js');
 if (fs.existsSync(privateTests)) {
   console.log('Your data (private, outside the repo)');

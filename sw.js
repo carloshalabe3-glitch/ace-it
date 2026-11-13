@@ -1,10 +1,11 @@
-var CACHE_NAME = 'ace-it-v9';
+var CACHE_NAME = 'ace-it-v10';
 var ASSETS = [
   './',
   './index.html',
   './style.css',
   './grades.js',
   './store.js',
+  './ics.js',
   './app.js',
   './manifest.json',
   './icons/icon-192.png',
@@ -23,10 +24,14 @@ self.addEventListener('install', function (event) {
   );
 });
 
+// "Add to Calendar" keeps one event file here (app.js puts it in), so the phone can open it
+// as a web address: the fetch handler below serves it like any other cached file.
+var CALENDAR_CACHE = 'ace-it-calendar';
+
 self.addEventListener('activate', function (event) {
   event.waitUntil(
     caches.keys().then(function (keys) {
-      return Promise.all(keys.filter(function (k) { return k !== CACHE_NAME; }).map(function (k) { return caches.delete(k); }));
+      return Promise.all(keys.filter(function (k) { return k !== CACHE_NAME && k !== CALENDAR_CACHE; }).map(function (k) { return caches.delete(k); }));
     }).then(function () { return self.clients.claim(); })
   );
 });
