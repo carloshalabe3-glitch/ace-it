@@ -665,6 +665,8 @@
 
   function renderAll() {
     endMorph();
+    // The entrance fade is for switching tabs only: a redraw after a change must not replay it.
+    appEl.classList.remove('entering');
     TABS.forEach(renderTab);
     // A screen whose term or course was deleted closes itself.
     for (var i = 0; i < ui.stack.length; i++) {
@@ -1040,11 +1042,138 @@
     else if (e.dd < 0) when = '<span class="due-late">Was due ' + esc(formatDate(it.date)) + '</span>';
     else when = '<span' + (e.dd <= 1 ? ' class="due-soon"' : '') + '>' + esc(relDay(it.date)) + '</span>';
     var end = done ? '<span class="chip chip-pg">Pending grade</span>' : upNeedHTML(c, it);
-    return '<div class="row up-row' + (done ? ' is-done' : '') + (ui.justChecked === it.id ? ' is-new' : '') + '">' +
+    return '<div class="row up-row' + (done ? ' is-done' : '') + (ui.justChecked === it.id ? ' is-new' : '') + '" data-item="' + it.id + '" data-course="' + c.id + '">' +
       '<button class="up-check" data-act="toggle-done" data-course="' + c.id + '" data-item="' + it.id + '" role="checkbox" aria-checked="' + done + '" aria-label="' + (done ? 'Not done yet: ' : 'Done: ') + esc(it.name) + '">' + CHECK_SVG + '</button>' +
       '<button class="up-open" data-act="open-course" data-id="' + c.id + '" data-morph-id="u:' + it.id + '"><span class="row-main"><span class="row-title">' + esc(it.name) + '</span>' +
       '<span class="row-sub up-sub"><span>' + esc(c.name) + '</span>' + when + '</span></span>' +
       '<span class="row-end">' + end + icon('chev', 'row-chev') + '</span></button></div>';
+  }
+
+  // Redraw, then let every Coming up row glide from where it was to where it is now.
+  function slideRows(movedId, redraw) {
+    var was = {};
+    tabEl('overview').querySelectorAll('.up-row[data-item]').forEach(function (r) { was[r.dataset.item] = r.getBoundingClientRect().top; });
+    redraw();
+    if (reducedMotion()) return;
+    tabEl('overview').querySelectorAll('.up-row[data-item]').forEach(function (r) {
+      var from = was[r.dataset.item];
+      if (from == null) { r.classList.add('is-arriving'); return; }
+      var dy = from - r.getBoundingClientRect().top;
+      if (Math.abs(dy) < 1) return;
+      r.classList.add('is-moving');
+      if (r.dataset.item === movedId) r.classList.add('is-lifted');
+      r.style.transition = 'none';
+      r.style.transform = 'translateY(' + dy + 'px)';
+      void r.offsetWidth;
+      r.style.transition = 'transform 520ms var(--spring-smooth), box-shadow 520ms ease';
+      r.style.transform = '';
+      setTimeout(function () { r.classList.remove('is-moving', 'is-lifted'); r.style.transition = ''; }, 560);
+    });
+  }
+
+  // ---------- hold a Coming up task: quick actions ----------
+
+  var HOLD_MS = 420;
+  var hold = null, holdFiredAt = 0;
+  function cancelHold() {
+    if (!hold) return;
+    clearTimeout(hold.t);
+    hold.row.classList.remove('is-pressing');
+    hold = null;
+  }
+  function wireHold() {
+    document.addEventListener('pointerdown', function (e) {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      var open = e.target.closest('.up-open');
+      if (!open || document.querySelector('.sheet-backdrop, .hold-backdrop')) return;
+      var row = open.closest('.up-row');
+      cancelHold();
+      row.classList.add('is-pressing');
+      hold = { row: row, x: e.clientX, y: e.clientY, t: setTimeout(function () {
+        var r = hold && hold.row;
+        hold = null;
+        if (!r) return;
+        r.classList.remove('is-pressing');
+        holdFiredAt = Date.now();
+        openTaskMenu(r);
+      }, HOLD_MS) };
+    }, { passive: true });
+    document.addEventListener('pointermove', function (e) {
+      if (hold && (Math.abs(e.clientX - hold.x) > 8 || Math.abs(e.clientY - hold.y) > 8)) cancelHold();
+    }, { passive: true });
+    document.addEventListener('pointerup', cancelHold);
+    document.addEventListener('pointercancel', cancelHold);
+    window.addEventListener('scroll', cancelHold, { passive: true });
+    // No text selection or system menu on a held row.
+    document.addEventListener('contextmenu', function (e) { if (e.target.closest('.up-open')) e.preventDefault(); });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeTaskMenu(); });
+  }
+
+  function closeTaskMenu() {
+    var bd = document.querySelector('.hold-backdrop');
+    if (!bd || bd._closing) return;
+    bd._closing = true;
+    bd.classList.remove('is-open');
+    setTimeout(function () { bd.remove(); }, 260);
+  }
+
+  function openTaskMenu(row) {
+    var c = courseById(row.dataset.course);
+    var f = c ? findItem(c, row.dataset.item) : null;
+    if (!f || f.item.status === 'graded') return;
+    var it = f.item;
+    var rect = row.getBoundingClientRect();
+    var bd = document.createElement('div');
+    bd.className = 'hold-backdrop';
+    bd.innerHTML = '<div class="hold-panel"><div class="hold-row" aria-hidden="true">' + row.querySelector('.up-open').innerHTML + '</div>' +
+      '<div class="hold-menu" role="menu" aria-label="' + esc(it.name) + '">' +
+      '<button class="hold-act" role="menuitem" data-hold="grade"><span>Enter grade</span>' + icon('edit') + '</button>' +
+      '</div></div>';
+    document.body.appendChild(bd);
+    var panel = bd.querySelector('.hold-panel');
+    panel.style.left = rect.left + 'px';
+    panel.style.width = rect.width + 'px';
+    var hgt = panel.offsetHeight;
+    var top = Math.max(16, Math.min(rect.top, window.innerHeight - hgt - 24));
+    panel.style.top = top + 'px';
+    void bd.offsetWidth;
+    bd.classList.add('is-open');
+    bd.addEventListener('click', function (e) {
+      var a = e.target.closest('[data-hold]');
+      closeTaskMenu();
+      if (!a) return;
+      if (a.dataset.hold === 'grade') gradeSheet(c, it);
+    });
+  }
+
+  // Enter a pending task's grade in one step.
+  function gradeSheet(c, it) {
+    openSheet('<h2>' + esc(it.name) + '</h2><p class="sheet-text" style="margin-bottom:0.9rem">' + esc(c.name) + '</p>' +
+      '<div class="field"><label for="gIn">Grade</label><input type="text" id="gIn" inputmode="decimal" autocomplete="off" enterkeyhint="done" placeholder="8.9 or 17/20">' +
+      '<p class="field-hint" id="gHint">Out of 10, or as points like 17/20.</p></div>' +
+      '<div class="field-error" data-main></div>' +
+      '<div class="sheet-actions"><button class="btn" data-act="cancel">Cancel</button><button class="btn btn-primary" data-act="save">Save grade</button></div>', function (bd) {
+      var inp = q(bd, '#gIn');
+      inp.focus();
+      inp.addEventListener('input', function () {
+        var p = G.parseScore(inp.value);
+        q(bd, '#gHint').textContent = p && isNum(p.max) ? 'That’s ' + G.fmtNum(p.score, 4) + ' out of 10.' : 'Out of 10, or as points like 17/20.';
+        setErr(bd, '');
+      });
+      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); bd._acts.save(); } });
+      bd._acts.cancel = function () { closeSheet(bd); };
+      bd._acts.save = function () {
+        var p = G.parseScore(inp.value);
+        if (!p) { setErr(bd, 'Enter a grade from 0 to 10, or points like 17/20.'); return; }
+        it.status = 'graded';
+        it.score = p.score;
+        it.points = isNum(p.max) ? p.points : null;
+        it.max = isNum(p.max) ? p.max : null;
+        it.done = false;
+        closeSheet(bd);
+        commit(it.name + ' · ' + (isNum(p.max) ? G.fmtNum(p.points, 4) + '/' + G.fmtNum(p.max, 4) : G.fmtNum(p.score, 4)));
+      };
+    });
   }
 
   function comingUpHTML() {
@@ -1068,7 +1197,8 @@
       if (list.length > 5) h += '<button class="add-row" data-act="toggle-upcoming">' + (ui.showAllUpcoming ? 'Show fewer' : 'Show all ' + list.length) + '</button>';
     }
     h += '</section>';
-    if (list.length) h += tipHTML('upcoming-check', 'Tap the circle once you’ve done something. It stays as Pending grade until you enter the grade.', 'overview');
+    if (list.length) h += tipHTML('upcoming-check', 'Tap the circle once you’ve done something. It stays as Pending grade until you enter the grade.', 'overview') ||
+      tipHTML('upcoming-hold', 'Hold a task to enter its grade.', 'overview');
     return h;
   }
 
@@ -2123,8 +2253,7 @@
       '<div class="field">' + segHTML('i-status', [{ val: 'graded', label: 'Graded' }, { val: 'pending', label: 'Pending' }], status) + '</div>' +
       '<div class="field-inline" id="doneField"><span>Done, waiting for grade<small style="display:block;color:var(--ink-soft);font-size:.8rem">Checked off in Coming up</small></span>' + switchHTML('i-done', !!it.done) + '</div>' +
       '<div class="field" id="scoreField"><label for="iScore">Grade</label><input type="text" id="iScore" inputmode="decimal" autocomplete="off" placeholder="8.9 or 17/20" value="' + esc(scoreText) + '"><p class="field-hint" id="scoreHint">Out of 10, or as points like 17/20.</p></div>' +
-      '<div class="field"><label for="iDate">Date <span class="opt">optional</span></label><input type="date" id="iDate" value="' + (it.date || '') + '">' +
-      '<button type="button" class="cal-add hidden" id="iCal" data-act="add-cal">' + icon('calplus') + 'Add to Calendar</button></div>' +
+      '<div class="field"><label for="iDate">Date <span class="opt">optional</span></label><input type="date" id="iDate" value="' + (it.date || '') + '"></div>' +
       moreToggleHTML('i-more', '', moreOpen) +
       '<div id="iMore"' + (moreOpen ? '' : ' class="hidden"') + '>' +
       '<div class="field"><label for="iWeight">Custom weight % <span class="opt">optional</span></label><input type="text" id="iWeight" inputmode="decimal" placeholder="' + esc(share) + '" value="' + (isNum(it.weight) ? it.weight : '') + '">' +
@@ -2138,8 +2267,6 @@
       function sync() {
         q(bd, '#scoreField').classList.toggle('hidden', status !== 'graded');
         q(bd, '#doneField').classList.toggle('hidden', status !== 'pending');
-        // Something still to come, with a day set: it can go on the phone's calendar.
-        q(bd, '#iCal').classList.toggle('hidden', status !== 'pending' || !val(bd, '#iDate'));
       }
       function preview() {
         var p = G.parseScore(val(bd, '#iScore'));
@@ -2155,8 +2282,7 @@
       sync(); preview();
       wireAdjEditor(bd, adj);
       if (isNew) setTimeout(function () { q(bd, '#iName').focus(); }, 350);
-      // toCalendar: save as usual, then hand the saved item to the phone's calendar.
-      function save(another, toCalendar) {
+      function save(another) {
         var name = val(bd, '#iName').trim() || q(bd, '#iName').placeholder;
         var parsed = null;
         if (status === 'graded') {
@@ -2181,10 +2307,8 @@
         closeSheet(bd);
         commit(name + ' · ' + (status === 'pending' ? 'pending' : isNum(target.max) ? G.fmtNum(target.points, 4) + '/' + G.fmtNum(target.max, 4) : G.fmtNum(target.score, 4)));
         if (another) setTimeout(function () { itemSheet(c, null, newCat.id); }, 200);
-        if (toCalendar) addToCalendar(c, target);
       }
       bd._acts.save = function () { save(false); };
-      bd._acts['add-cal'] = function () { save(false, true); };
       bd._acts['save-another'] = function () { save(true); };
       bd._acts.cancel = function () { closeSheet(bd); };
       bd._acts['delete'] = function () {
@@ -2205,79 +2329,6 @@
   function suggestName(cat) {
     var base = cat.name.replace(/s$/i, '').split(/[+\/]/)[0].trim() || 'Item';
     return base + ' ' + (cat.items.length + 1);
-  }
-
-  // ---------- add to calendar ----------
-  // One all-day event on the item's date, made on the phone: nothing is sent anywhere.
-
-  function calendarFile(c, it) {
-    var r = result(c);
-    var lines = [];
-    r.pendingSlots.forEach(function (sl) { if (sl.item === it) lines.push('Worth ' + fmtW(sl.w) + ' of ' + c.name + '.'); });
-    // What it needed on the day it was added: a snapshot, the calendar won't follow later grades.
-    var F = r.expectedFinal;
-    if (isNum(F)) {
-      var opts = { assumed: assumed() };
-      var keep = G.neededOnItem(c, it.id, F, opts);
-      var needs = [];
-      if (keep.status === 'needed') needs.push('needs ' + ceil2(keep.score) + ' to keep your ' + F);
-      else if (keep.status === 'secured') needs.push('your ' + F + ' is safe');
-      if (F < 10) {
-        var up = G.neededOnItem(c, it.id, F + 1, opts);
-        if (up.status === 'needed') needs.push(ceil2(up.score) + ' for ' + (F + 1 === 8 ? 'an ' : 'a ') + (F + 1));
-      }
-      if (needs.length) lines.push('When added: ' + needs.join(', ') + '.');
-    }
-    return Ics.eventFile({ uid: it.id + '@ace-it', date: it.date, summary: it.name + ' · ' + c.name, description: lines.join('\n') });
-  }
-
-  var CALENDAR_CACHE = 'ace-it-calendar';        // the same name as in sw.js
-  var CALENDAR_PATH = 'calendar/ace-it-event.ics';
-  function isApplePhone() {
-    return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  }
-
-  function addToCalendar(c, it) {
-    var text = it && it.date ? calendarFile(c, it) : null;
-    if (!text) return;
-    var name = Ics.fileName(it.name);
-    var blob = new Blob([text], { type: 'text/calendar;charset=utf-8' });
-    function download() {
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement('a');
-      a.href = url; a.download = name;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
-      showToast('Calendar file saved. Open it to add the event.');
-    }
-    function share() {
-      var file = null;
-      try { file = new File([blob], name, { type: 'text/calendar' }); } catch (e) {}
-      if (!file || !navigator.canShare || !navigator.canShare({ files: [file] })) return false;
-      navigator.share({ files: [file] }).catch(function (err) { if (err && err.name !== 'AbortError') download(); });
-      return true;
-    }
-    if (!isApplePhone()) { download(); return; }
-    // The iPhone only offers "Add to Calendar" for an event it opens as a web address, not
-    // for a file made in the page. So the event goes into the app's own offline cache and
-    // the app opens it from there; the service worker answers without touching the network.
-    var sw = navigator.serviceWorker;
-    if (sw && sw.controller && window.caches) {
-      var address = new URL(CALENDAR_PATH, location.href).href;
-      caches.open(CALENDAR_CACHE).then(function (cache) {
-        return cache.put(address, new Response(blob, { headers: {
-          'Content-Type': 'text/calendar; charset=utf-8',
-          'Content-Disposition': 'inline; filename="' + name + '"',
-          'Cache-Control': 'no-store'
-        } }));
-      }).then(function () {
-        location.href = CALENDAR_PATH + '?t=' + Date.now();
-      }, function () {
-        if (!share()) download();
-      });
-      return;
-    }
-    if (!share()) download();
   }
 
   // ---------- course adjustments, expected, posted ----------
@@ -2586,7 +2637,7 @@
         it.done = on;
         ui.justChecked = on ? it.id : null;
         persist();
-        renderAll();
+        slideRows(it.id, renderAll);
         ui.justChecked = null;
       }
       set(!it.done);
@@ -2697,6 +2748,7 @@
   };
 
   document.addEventListener('click', function (e) {
+    if (Date.now() - holdFiredAt < 700 && e.target.closest('.up-open')) { e.preventDefault(); e.stopPropagation(); return; }
     var tipTarget = e.target.closest('.chart [data-tip]');
     document.querySelectorAll('.chart-tip').forEach(function (t) { if (!tipTarget || t.parentNode !== tipTarget.closest('.chart')) t.remove(); });
     if (tipTarget) { showChartTip(tipTarget); return; }
@@ -2795,6 +2847,7 @@
   document.addEventListener('visibilitychange', function () { if (!document.hidden) applyTextSize(); });
   wireTabBar();
   wireEdgeSwipe();
+  wireHold();
   if (history.state && history.state.ace) history.replaceState(null, '');
   renderAll();
   goTab('overview');

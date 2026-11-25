@@ -851,18 +851,6 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
 .more-toggle span + .row-chev { margin-left: auto; }
 .more-toggle.is-open .row-chev { transform: rotate(90deg); }
 
-/* "Add to Calendar", under the date of something still pending. */
-.cal-add {
-  display: inline-flex; align-items: center; gap: 0.4rem;
-  margin-top: 0.6rem; min-height: 38px; padding: 0.4rem 0.9rem 0.4rem 0.7rem;
-  border: none; border-radius: 999px;
-  background: var(--accent-tint); color: var(--accent-deep);
-  font-size: 0.92rem; font-weight: 600;
-  transition: transform var(--spring-out), background var(--t-fast);
-}
-.cal-add:active { transform: scale(0.95); transition-duration: var(--press-in); }
-.cal-add svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
-
 /* Grades | Forecast: the pane you pick slides in from its side. */
 .course-pane.pane-next { animation: paneNext var(--t-snappy) var(--spring-snappy) backwards; }
 .course-pane.pane-prev { animation: panePrev var(--t-snappy) var(--spring-snappy) backwards; }
@@ -928,3 +916,27 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
 .try-row.is-bad .try-in { border-color: var(--risk); color: var(--risk); }
 .try-slider { width: 100%; margin: 0.55rem 0 0.1rem; accent-color: var(--accent); }
 .try-row:not(.is-set) .try-slider { opacity: 0.55; }
+
+/* ================================================================
+   Coming up: sliding rows and the hold menu
+   ================================================================ */
+
+.up-open { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.up-row.is-pressing .up-open { transform: scale(0.965); transition: transform 380ms var(--ease-out); }
+.up-row.is-moving { position: relative; z-index: 1; background: var(--surface); }
+.up-row.is-lifted { z-index: 2; box-shadow: 0 10px 26px -14px rgba(26, 20, 20, 0.45); }
+.up-row.is-arriving { animation: riseIn 360ms var(--spring-smooth) backwards; }
+
+.hold-backdrop { position: fixed; inset: 0; z-index: 72; background: rgba(26, 20, 20, 0); transition: background 240ms ease, -webkit-backdrop-filter 240ms ease, backdrop-filter 240ms ease; }
+.hold-backdrop.is-open { background: rgba(26, 20, 20, 0.16); -webkit-backdrop-filter: blur(14px) saturate(140%); backdrop-filter: blur(14px) saturate(140%); }
+:where([data-theme="dark"]) .hold-backdrop.is-open { background: rgba(0, 0, 0, 0.42); }
+.hold-panel { position: fixed; display: flex; flex-direction: column; gap: 0.55rem; transform: scale(0.97); opacity: 0; transition: transform 460ms var(--spring-bouncy), opacity 180ms ease; }
+.hold-backdrop.is-open .hold-panel { transform: none; opacity: 1; }
+.hold-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.8rem 1rem; border-radius: 16px; background: var(--bg); color: var(--ink); box-shadow: 0 16px 40px -18px rgba(0, 0, 0, 0.5); pointer-events: none; }
+.hold-row .row-chev { display: none; }
+.hold-menu { align-self: flex-start; width: min(250px, 72%); border-radius: 14px; overflow: hidden; background: var(--glass-strong); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); box-shadow: var(--glass-shine), 0 16px 40px -18px rgba(0, 0, 0, 0.5); transform-origin: top left; }
+.hold-act { display: flex; align-items: center; justify-content: space-between; gap: 1rem; width: 100%; padding: 0.8rem 1rem; background: none; border: none; border-top: 1px solid var(--line); color: var(--ink); font-size: 1rem; text-align: left; }
+.hold-act:first-child { border-top: none; }
+.hold-act:active { background: var(--surface-2); }
+.hold-act svg { width: 20px; height: 20px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+@media (prefers-reduced-motion: reduce) { .hold-panel { transition: opacity 120ms; transform: none; } .up-row.is-arriving { animation: none; } }
