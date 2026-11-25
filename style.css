@@ -133,7 +133,13 @@ html, body {
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
   -webkit-text-size-adjust: 100%;
+  /* Like a native app: pressing text doesn't select it or pop up Copy / Look Up. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
+/* Anything you type into stays selectable, so editing and pasting work as usual. */
+input, textarea, select, [contenteditable="true"] { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
 html { font-size: 16px; }
 body {
   min-height: 100vh;
