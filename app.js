@@ -1029,29 +1029,46 @@
     return h ? '<span class="up-need">' + h + '</span>' : '';
   }
 
+  var CHECK_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M7.5 12.4l3.1 3.1 6-6.4"/></svg>';
+
+  // One Coming up row: a circle to check it off, and the rest opens the course.
+  // Checked off = done, waiting for its grade: it drops to the bottom and stops nagging.
+  function upRowHTML(e) {
+    var it = e.it, c = e.c, done = !!it.done;
+    var when;
+    if (done) when = it.date ? '<span>' + esc(formatDate(it.date)) + '</span>' : '';
+    else if (e.dd < 0) when = '<span class="due-late">Was due ' + esc(formatDate(it.date)) + '</span>';
+    else when = '<span' + (e.dd <= 1 ? ' class="due-soon"' : '') + '>' + esc(relDay(it.date)) + '</span>';
+    var end = done ? '<span class="chip chip-pg">Pending grade</span>' : upNeedHTML(c, it);
+    return '<div class="row up-row' + (done ? ' is-done' : '') + (ui.justChecked === it.id ? ' is-new' : '') + '">' +
+      '<button class="up-check" data-act="toggle-done" data-course="' + c.id + '" data-item="' + it.id + '" role="checkbox" aria-checked="' + done + '" aria-label="' + (done ? 'Not done yet: ' : 'Done: ') + esc(it.name) + '">' + CHECK_SVG + '</button>' +
+      '<button class="up-open" data-act="open-course" data-id="' + c.id + '" data-morph-id="u:' + it.id + '"><span class="row-main"><span class="row-title">' + esc(it.name) + '</span>' +
+      '<span class="row-sub up-sub"><span>' + esc(c.name) + '</span>' + when + '</span></span>' +
+      '<span class="row-end">' + end + icon('chev', 'row-chev') + '</span></button></div>';
+  }
+
   function comingUpHTML() {
-    // Upcoming, plus anything that passed in the last two weeks without a grade.
-    var list = pendingItemsIn(function (it) { return it.date && dayDiff(it.date) >= -14; });
-    var undated = pendingItemsIn(function (it) { return !it.date; }).length;
+    // Upcoming, anything that passed in the last two weeks without a grade, and
+    // everything checked off that's still waiting for its grade.
+    var list = pendingItemsIn(function (it) { return it.done || (it.date && dayDiff(it.date) >= -14); });
+    var undated = pendingItemsIn(function (it) { return !it.date && !it.done; }).length;
     if (!list.length && !undated) return '';
-    list.sort(function (a, b) { return a.dd - b.dd || a.it.name.localeCompare(b.it.name); });
-    var h = '<div class="section-label">Coming up</div><section class="card card-flush" style="margin-top:0">';
+    var far = 99999;
+    list.sort(function (a, b) {
+      return (a.it.done ? 1 : 0) - (b.it.done ? 1 : 0) || (a.dd == null ? far : a.dd) - (b.dd == null ? far : b.dd) || a.it.name.localeCompare(b.it.name);
+    });
+    var waiting = list.filter(function (e) { return e.it.done; }).length;
+    var h = '<div class="section-label">Coming up' + (waiting ? '<span class="sl-note">' + waiting + ' waiting for ' + (waiting === 1 ? 'a grade' : 'grades') + '</span>' : '') + '</div>' +
+      '<section class="card card-flush" style="margin-top:0">';
     if (!list.length) {
       h += '<p class="hint" style="padding:0.9rem 1rem;margin:0">Give your pending exams and projects a date (open the item, then Date) and the next ones show up here, with the grade each one needs.</p>';
     } else {
       var shown = ui.showAllUpcoming ? list : list.slice(0, 5);
-      shown.forEach(function (e) {
-        var when = e.dd < 0
-          ? '<span class="due-late">Was due ' + esc(formatDate(e.it.date)) + ' · enter the grade</span>'
-          : '<span' + (e.dd <= 1 ? ' class="due-soon"' : '') + '>' + esc(relDay(e.it.date)) + '</span>';
-        h += '<button class="row" data-act="open-course" data-id="' + e.c.id + '" data-morph-id="u:' + e.it.id + '"><span class="row-main"><span class="row-title">' + esc(e.it.name) + '</span>' +
-          '<span class="row-sub up-sub"><span>' + esc(e.c.name) + '</span>' + when + '</span></span>' +
-          '<span class="row-end">' + upNeedHTML(e.c, e.it) + icon('chev', 'row-chev') + '</span></button>';
-      });
+      shown.forEach(function (e) { h += upRowHTML(e); });
       if (list.length > 5) h += '<button class="add-row" data-act="toggle-upcoming">' + (ui.showAllUpcoming ? 'Show fewer' : 'Show all ' + list.length) + '</button>';
     }
     h += '</section>';
-    if (list.length) h += tipHTML('upcoming', 'Each grade assumes your other pending work comes in at your current average.', 'overview');
+    if (list.length) h += tipHTML('upcoming-check', 'Tap the circle once you’ve done something. It stays as Pending grade until you enter the grade.', 'overview');
     return h;
   }
 
@@ -1270,7 +1287,7 @@
     }
 
     if (c.mode === 'single') h += singleCardHTML(c, r, t);
-    else h += weightedHTML(c, r, t, el._courseTab || 'grades');
+    else h += weightedHTML(c, r, t, el._courseTab || 'grades', el._trial || (el._trial = {}));
 
     // Adjustments on the whole course
     if (c.adjustments.length) {
@@ -1289,6 +1306,73 @@
     h += '<div class="danger-zone"><button class="text-btn text-btn-danger" data-act="delete-course">Delete course</button></div>';
     el.innerHTML = h;
     el.dataset.id = c.id;
+  }
+
+  // ---------- Try grades ----------
+
+  function trySlots(r) {
+    return r.pendingSlots.map(function (sl) {
+      return { key: sl.item ? sl.item.id : 'cat:' + sl.cat.id, name: sl.item ? sl.item.name : sl.cat.name, w: sl.w };
+    });
+  }
+
+  function tryCardHTML(c, r, t, trials) {
+    var hold = r.expectedPending;
+    var h = '<section class="card try-card"><div class="card-head"><h3>Try grades<span class="cat-weight">not saved</span></h3>' +
+      '<button class="text-btn text-btn-sm" data-act="try-reset">Reset</button></div>' +
+      '<div class="try-result">' + tryResultHTML(c, r, t, trials) + '</div>';
+    trySlots(r).forEach(function (sl) {
+      var v = trials[sl.key];
+      var start = isNum(v) ? v : (isNum(hold) ? Math.round(hold * 10) / 10 : 9);
+      h += '<div class="try-row' + (isNum(v) ? ' is-set' : '') + '"><div class="try-top"><span class="try-name"><span class="row-title">' + esc(sl.name) + '</span><small>' + fmtW(sl.w) + '</small></span>' +
+        '<input class="try-in" type="text" inputmode="decimal" autocomplete="off" data-try="' + esc(sl.key) + '" value="' + (isNum(v) ? G.fmtNum(v, 2) : '') + '" placeholder="' + (isNum(hold) ? G.fmtNum(hold, 2) : '–') + '" aria-label="Try a grade for ' + esc(sl.name) + '"></div>' +
+        '<input class="try-slider" type="range" min="0" max="10" step="0.1" data-try-slider="' + esc(sl.key) + '" value="' + start + '" aria-label="Slide a grade for ' + esc(sl.name) + '"></div>';
+    });
+    return h + '</section>';
+  }
+
+  function tryResultHTML(c, r, t, trials) {
+    var hold = r.expectedPending;
+    var any = Object.keys(trials).some(function (k) { return isNum(trials[k]); });
+    var copy = G.withTrialScores(c, trials, hold);
+    var tr = G.computeCourse(copy, { assumed: assumed() });
+    var full = tr.pendingWeight <= 0;
+    var label = !any ? 'Expected now' : full ? 'Final with these grades' : 'Expected with these grades';
+    var h = '<div class="big-label">' + label + '</div>' + pairHTML(tr.expected, t, 'pair-lg');
+    if (any) {
+      var dcopy = JSON.parse(JSON.stringify(data));
+      dcopy.courses = dcopy.courses.map(function (x) { return x.id === c.id ? copy : x; });
+      var was = G.summarize(data).projected, now = G.summarize(dcopy).projected;
+      h += '<div class="try-lines"><span>Now</span><span class="num">' + (isNum(r.expected) ? G.fmtRaw(r.expected, t) + ' → ' + r.expectedFinal : '–') + '</span>' +
+        (c.counts && isNum(was) && isNum(now) ? '<span>Your average</span><span class="num">' + G.fmtAvg(was) + ' → <b>' + G.fmtAvg(now) + '</b></span>' : '') + '</div>';
+      if (!full && isNum(hold)) h += '<p class="hint" style="margin-top:0.4rem">The rest counts at ' + G.fmtNum(hold, 2) + ', your expected grade.</p>';
+    }
+    return h;
+  }
+
+  // Typing or sliding redraws only the result, never the field you're using.
+  function onTryInput(field) {
+    var screen = field.closest('.screen');
+    var c = screen ? courseById(screen.dataset.id) : null;
+    if (!c) return;
+    var trials = screen._trial || (screen._trial = {});
+    var row = field.closest('.try-row');
+    var key = field.dataset.try != null ? field.dataset.try : field.dataset.trySlider;
+    if (field.dataset.try != null) {
+      var text = field.value.trim();
+      var p = text ? G.parseScore(text) : null;
+      row.classList.toggle('is-bad', !!text && !p);
+      if (!text) delete trials[key];
+      else if (p) { trials[key] = p.score; row.querySelector('.try-slider').value = p.score; }
+    } else {
+      var v = Math.round(+field.value * 10) / 10;
+      trials[key] = v;
+      row.querySelector('.try-in').value = G.fmtNum(v, 2);
+      row.classList.remove('is-bad');
+    }
+    row.classList.toggle('is-set', isNum(trials[key]));
+    var box = screen.querySelector('.try-result');
+    if (box) box.innerHTML = tryResultHTML(c, result(c), thr(c), trials);
   }
 
   function projBox(label, raw, t, note, act, cls) {
@@ -1313,11 +1397,14 @@
     return h + '</section>';
   }
 
-  function weightedHTML(c, r, t, tab) {
+  function weightedHTML(c, r, t, tab, trials) {
     var h = '';
     if (!c.categories.length) {
       return '<section class="card">' + emptyHTML('target', 'Set up how this course is graded', 'Add categories and their weights, like “Exams 60 / Homework 40”. Items go under each one.', 'Add categories', 'edit-categories') + '</section>';
     }
+    // Try grades: play with made-up scores on what's still pending (never saved)
+    if (!isFinal(c) && r.pendingSlots.length) h += tryCardHTML(c, r, t, trials || {});
+
     // Projections
     var srcNote = r.expectedPendingSource === 'set' ? 'Pending at ' + G.fmtNum(r.expectedPending) + ' (your number)'
       : r.expectedPendingSource === 'average' ? 'Pending at your average (' + G.fmtRaw(r.expectedPending, t) + ')'
@@ -1402,7 +1489,7 @@
         if (it.status === 'graded' && isNum(entry.score)) {
           right = (isNum(it.points) && isNum(it.max) ? '<span class="row-value">' + G.fmtNum(it.points) + '/' + G.fmtNum(it.max) + '</span>' : '') +
             '<span class="score">' + entry.score.toFixed(2) + '</span>';
-        } else right = chip('Pending');
+        } else right = it.done ? '<span class="chip chip-pg">Pending grade</span>' : chip('Pending');
         h += '<button class="row' + (it.status === 'graded' ? '' : ' is-pending') + '" data-act="edit-item" data-id="' + it.id + '"><span class="row-main"><span class="row-title">' + esc(it.name) + '</span>' +
           '<span class="row-sub">' + sub.join(' · ') + adjChips + '</span></span><span class="row-end">' + right + '</span></button>';
       });
@@ -2034,6 +2121,7 @@
       '<div class="field"><label for="iName">Name</label><input type="text" id="iName" maxlength="60" autocomplete="off" placeholder="' + esc(suggestName(cat)) + '" value="' + esc(it.name) + '"></div>' +
       (c.categories.length > 1 ? '<div class="field"><label for="iCat">Category</label><select id="iCat">' + c.categories.map(function (g) { return '<option value="' + g.id + '"' + (g.id === cat.id ? ' selected' : '') + '>' + esc(g.name) + ' (' + G.fmtNum(g.weight) + '%)</option>'; }).join('') + '</select></div>' : '') +
       '<div class="field">' + segHTML('i-status', [{ val: 'graded', label: 'Graded' }, { val: 'pending', label: 'Pending' }], status) + '</div>' +
+      '<div class="field-inline" id="doneField"><span>Done, waiting for grade<small style="display:block;color:var(--ink-soft);font-size:.8rem">Checked off in Coming up</small></span>' + switchHTML('i-done', !!it.done) + '</div>' +
       '<div class="field" id="scoreField"><label for="iScore">Grade</label><input type="text" id="iScore" inputmode="decimal" autocomplete="off" placeholder="8.9 or 17/20" value="' + esc(scoreText) + '"><p class="field-hint" id="scoreHint">Out of 10, or as points like 17/20.</p></div>' +
       '<div class="field"><label for="iDate">Date <span class="opt">optional</span></label><input type="date" id="iDate" value="' + (it.date || '') + '">' +
       '<button type="button" class="cal-add hidden" id="iCal" data-act="add-cal">' + icon('calplus') + 'Add to Calendar</button></div>' +
@@ -2049,6 +2137,7 @@
     openSheet(html, function (bd) {
       function sync() {
         q(bd, '#scoreField').classList.toggle('hidden', status !== 'graded');
+        q(bd, '#doneField').classList.toggle('hidden', status !== 'pending');
         // Something still to come, with a day set: it can go on the phone's calendar.
         q(bd, '#iCal').classList.toggle('hidden', status !== 'pending' || !val(bd, '#iDate'));
       }
@@ -2083,6 +2172,7 @@
         target.points = parsed && isNum(parsed.max) ? parsed.points : null;
         target.max = parsed && isNum(parsed.max) ? parsed.max : null;
         target.date = val(bd, '#iDate') || null;
+        target.done = status === 'pending' && q(bd, '[data-sw="i-done"]').checked;
         target.weight = w;
         target.adjustments = cleanAdj(adj);
         var newCat = q(bd, '#iCat') ? findCategory(c, val(bd, '#iCat')) : cat;
@@ -2487,6 +2577,26 @@
     'open-term': function (el) { push('term', el.dataset.id, el); },
     'open-course': function (el) { push('course', el.dataset.id, el); },
     'toggle-upcoming': function () { ui.showAllUpcoming = !ui.showAllUpcoming; renderTab('overview'); },
+    'toggle-done': function (el) {
+      var c = courseById(el.dataset.course);
+      var f = c ? findItem(c, el.dataset.item) : null;
+      if (!f || f.item.status === 'graded') return;
+      var it = f.item;
+      function set(on) {
+        it.done = on;
+        ui.justChecked = on ? it.id : null;
+        persist();
+        renderAll();
+        ui.justChecked = null;
+      }
+      set(!it.done);
+      showToast(it.done ? it.name + ' · pending grade' : it.name + ' · not done yet', { action: 'Undo', onAction: function () { set(!it.done); } });
+    },
+    'try-reset': function (el) {
+      var screen = el.closest('.screen');
+      if (screen) screen._trial = {};
+      renderAll();
+    },
     'open-whatif': function (el) { startWhatIf(); push('whatif', 'sandbox', el); },
     'wi-pick': function (el) {
       if (!ui.whatIf) return;
@@ -2607,6 +2717,7 @@
   });
   // The what-if slider updates the numbers live without redrawing itself mid-drag.
   document.addEventListener('input', function (e) {
+    if (e.target.dataset && (e.target.dataset.try != null || e.target.dataset.trySlider != null)) { onTryInput(e.target); return; }
     if (e.target.id !== 'wiFuture' || !ui.whatIf) return;
     ui.whatIf.future = +e.target.value;
     var lab = $('wiFutureVal');

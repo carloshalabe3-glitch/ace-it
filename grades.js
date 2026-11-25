@@ -339,6 +339,29 @@
     return out.sort(function (a, b) { return b - a; });
   }
 
+  // A copy of the course with some pending work "graded" at made-up scores, for the
+  // Try grades sandbox. trials: { itemId: score, 'cat:'+categoryId: score } (an empty
+  // category is one pending slot). holdPending keeps untried work at today's expected
+  // grade, so trying one exam doesn't move the guess for the others. Never saved.
+  function withTrialScores(course, trials, holdPending) {
+    var copy = JSON.parse(JSON.stringify(course));
+    trials = trials || {};
+    (copy.categories || []).forEach(function (g) {
+      var items = Array.isArray(g.items) ? g.items : (g.items = []);
+      items.forEach(function (it) {
+        if (it.status !== 'graded' && isNum(trials[it.id])) {
+          it.status = 'graded'; it.score = clamp(trials[it.id], 0, 10); it.points = null; it.max = null;
+        }
+      });
+      var key = 'cat:' + g.id;
+      if (!items.length && isNum(trials[key])) {
+        g.items = [{ id: key, name: g.name, status: 'graded', score: clamp(trials[key], 0, 10), adjustments: [] }];
+      }
+    });
+    if (!isNum(copy.expectedPending) && isNum(holdPending)) copy.expectedPending = holdPending;
+    return copy;
+  }
+
   function courseThreshold(course) { return normThreshold(course && course.rounding ? course.rounding.threshold : 5); }
 
   // ---------- the whole degree ----------
@@ -468,6 +491,7 @@
     neededForFinal: neededForFinal,
     neededOnItem: neededOnItem,
     neededTargets: neededTargets,
+    withTrialScores: withTrialScores,
     courseThreshold: courseThreshold,
     defaultAssumed: defaultAssumed,
     termAverage: termAverage,

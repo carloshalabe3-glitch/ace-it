@@ -97,6 +97,7 @@
       id: str(it.id) || uid('i'),
       name: str(it.name, 'Item'),
       status: it.status === 'graded' ? 'graded' : 'pending',
+      done: it.status !== 'graded' && it.done === true,   // done, waiting for its grade
       score: numOrNull(it.score),
       points: numOrNull(it.points),
       max: isNum(it.max) && it.max > 0 ? it.max : null,

@@ -93,6 +93,21 @@ test('needed: secured and impossible', function () {
 });
 
 console.log('Weighted courses');
+test('try grades: made-up scores on pending work, never touching the course', function () {
+  var c = course([cat('a', 60, [item('x', 9)]), cat('b', 40, [item('p1', null), item('p2', null)])]);
+  var p1 = c.categories[1].items[0].id;
+  var now = G.computeCourse(c);
+  near(now.expected, 9);
+  var tried = G.withTrialScores(c, (function () { var o = {}; o[p1] = 10; return o; })(), now.expectedPending);
+  near(G.computeCourse(tried).expected, 9.2);          // the untried 20% stays at today's 9
+  eq(c.categories[1].items[0].status, 'pending');      // the real course is unchanged
+  var empty = course([cat('a', 60, [item('x', 9)]), cat('b', 40, [])]);
+  var t2 = G.withTrialScores(empty, { 'cat:b': 8 }, 9);
+  var r2 = G.computeCourse(t2);
+  near(r2.expected, 8.6); near(r2.pendingWeight, 0);
+  near(G.computeCourse(G.withTrialScores(c, { nope: 3 }, 9)).expected, 9);
+});
+
 test('needed rows: expected, one next to it, and the floor', function () {
   var list = function (e, b, w, p) { return G.neededTargets({ expectedFinal: e, bestFinal: b, worstFinal: w }, p == null ? 6 : p).join(','); };
   eq(list(10, 10, 8), '10,9,8');      // already a 10: show the one below instead
@@ -233,6 +248,13 @@ test('a term with no courses, a course with no categories, items all pending', f
 });
 
 console.log('Storage');
+test('done-but-ungraded mark survives saving, and clears once graded', function () {
+  var d = Store.migrate({ terms: [{ id: 't1' }], courses: [{ id: 'c1', termId: 't1', name: 'X', mode: 'weighted', categories: [{ id: 'g', name: 'A', weight: 100, items: [
+    { id: 'i1', name: 'Exam', status: 'pending', done: true }, { id: 'i2', name: 'Quiz', status: 'graded', score: 9, done: true }, { id: 'i3', name: 'HW', status: 'pending' }] }] }] });
+  var items = d.courses[0].categories[0].items;
+  eq(items[0].done, true); eq(items[1].done, false); eq(items[2].done, false);
+});
+
 test('fresh data has the current schema and default tiers', function () {
   var d = Store.freshData();
   eq(d.schemaVersion, Store.SCHEMA_VERSION); eq(d.settings.tiers.length, 4); eq(d.settings.totalCourses, null);

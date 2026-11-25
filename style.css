@@ -882,3 +882,49 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
   .impact { transform: translateX(-50%); }
   .toast { transform: translateX(-50%); }
 }
+
+/* ================================================================
+   Coming up checklist
+   ================================================================ */
+
+.up-row { padding: 0; gap: 0; align-items: stretch; }
+.up-check { flex-shrink: 0; width: 52px; display: flex; align-items: center; justify-content: center; background: none; border: none; padding: 0 0 0 4px; color: var(--ink-mute); }
+.up-check svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform var(--spring-out); }
+.up-check svg path { opacity: 0; }
+.up-check:active svg { transform: scale(0.86); transition-duration: var(--press-in); }
+.up-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.75rem; background: none; border: none; text-align: left; color: var(--ink); font-size: 0.98rem; padding: 0.75rem 1rem 0.75rem 0.15rem; transition: background var(--t-fast); }
+.up-open:active { background: var(--surface-2); }
+.up-row.is-done .up-check { color: var(--accent); }
+.up-row.is-done .up-check svg circle { fill: var(--accent); stroke: var(--accent); }
+.up-row.is-done .up-check svg path { opacity: 1; stroke: #fff; stroke-width: 2.4; }
+.up-row.is-done .row-title { color: var(--ink-soft); }
+.up-row.is-new .up-check svg { animation: checkPop 420ms var(--ease-spring); }
+.up-row.is-new .up-check svg path { stroke-dasharray: 16; stroke-dashoffset: 16; animation: checkDraw 300ms 90ms var(--ease-out) forwards; }
+@keyframes checkPop { 0% { transform: scale(0.7); } 100% { transform: scale(1); } }
+@keyframes checkDraw { to { stroke-dashoffset: 0; } }
+.chip-pg { background: var(--accent-tint); color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-soft); }
+.sl-note { float: right; text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .up-row.is-new .up-check svg, .up-row.is-new .up-check svg path { animation: none; stroke-dashoffset: 0; } }
+
+/* ================================================================
+   Try grades
+   ================================================================ */
+
+.try-card .card-head { margin-bottom: 0.4rem; }
+.try-result { padding: 0.2rem 0 0.7rem; border-bottom: 1px solid var(--line); margin-bottom: 0.2rem; }
+.try-result .pair-lg { font-size: 2.2rem; }
+.try-lines { display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.8rem; margin-top: 0.5rem; font-size: 0.86rem; color: var(--ink-soft); }
+.try-lines .num { text-align: right; color: var(--ink); }
+.try-lines b { color: var(--accent); font-weight: 700; }
+.try-row { padding: 0.65rem 0 0.35rem; border-top: 1px solid var(--line); }
+.try-row:first-of-type { border-top: none; }
+.try-top { display: flex; align-items: center; gap: 0.75rem; }
+.try-name { flex: 1; min-width: 0; }
+.try-name small { color: var(--ink-soft); font-size: 0.78rem; }
+.try-in { width: 78px; flex-shrink: 0; text-align: center; font-size: 1.05rem; font-weight: 650; font-variant-numeric: tabular-nums; border: 1.5px solid var(--line-strong); background: var(--bg); color: var(--ink); border-radius: 11px; padding: 0.45rem 0.5rem; min-height: 40px; outline: none; -webkit-appearance: none; appearance: none; }
+.try-in::placeholder { color: var(--ink-mute); font-weight: 500; }
+.try-in:focus { border-color: var(--accent); }
+.try-row.is-set .try-in { border-color: var(--accent); color: var(--accent); }
+.try-row.is-bad .try-in { border-color: var(--risk); color: var(--risk); }
+.try-slider { width: 100%; margin: 0.55rem 0 0.1rem; accent-color: var(--accent); }
+.try-row:not(.is-set) .try-slider { opacity: 0.55; }
