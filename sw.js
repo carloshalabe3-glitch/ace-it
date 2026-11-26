@@ -1,10 +1,12 @@
-var CACHE_NAME = 'ace-it-v15';
+var CACHE_NAME = 'ace-it-v16';
 var ASSETS = [
   './',
   './index.html',
   './style.css',
   './grades.js',
   './store.js',
+  './i18n.js',
+  './i18n-es.js',
   './app.js',
   './manifest.json',
   './icons/icon-192.png',

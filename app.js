@@ -7,6 +7,30 @@
 
   var data = S.load();
 
+  // ---------- language ----------
+  // English is written here; i18n.js turns what reaches the screen into the chosen language.
+  var I = window.I18N;
+  function langPref() { var l = S.getPref('lang'); return l === 'es' || l === 'en' ? l : null; }
+  function dateLocale() { return I.getLang() === 'es' ? 'es-MX' : 'en-US'; }
+  I.setLang(langPref() || 'en');
+  document.documentElement.setAttribute('lang', I.getLang());
+  // Anything the person typed is never translated.
+  function refreshUserText() {
+    var list = [];
+    data.terms.forEach(function (t) { list.push(t.label, t.dates); });
+    data.courses.forEach(function (c) {
+      list.push(c.name, c.professor);
+      (c.adjustments || []).forEach(function (a) { list.push(a.label); });
+      (c.categories || []).forEach(function (g) {
+        list.push(g.name);
+        g.items.forEach(function (it) { list.push(it.name); (it.adjustments || []).forEach(function (a) { list.push(a.label); }); });
+      });
+    });
+    I.setUserText(list);
+  }
+  refreshUserText();
+  var SPANISH_TIER_NAMES = { 'Required': 'Requerido', 'Goal': 'Meta', 'Ideal': 'Ideal', 'Honorable mention': 'Mención honorífica' };
+
   // ---------- small helpers ----------
 
   function $(id) { return document.getElementById(id); }
@@ -665,6 +689,7 @@
 
   function renderAll() {
     endMorph();
+    refreshUserText();
     // The entrance fade is for switching tabs only: a redraw after a change must not replay it.
     appEl.classList.remove('entering');
     TABS.forEach(renderTab);
@@ -1000,7 +1025,7 @@
     var d = dayDiff(key);
     if (d === 0) return 'Today';
     if (d === 1) return 'Tomorrow';
-    if (d > 1 && d < 7) { var p = key.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString('en-US', { weekday: 'long' }); }
+    if (d > 1 && d < 7) { var p = key.split('-'); return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString(dateLocale(), { weekday: 'long' }); }
     return formatDate(key) + (d > 0 && d <= 45 ? ' · in ' + d + ' days' : '');
   }
 
@@ -1650,7 +1675,7 @@
   function formatDate(key) {
     var p = key.split('-');
     var d = new Date(+p[0], +p[1] - 1, +p[2]);
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return d.toLocaleDateString(dateLocale(), { month: 'short', day: 'numeric' });
   }
 
   // ================================================================
@@ -1771,6 +1796,8 @@
         { val: 'light', label: '<svg aria-hidden="true"><use href="#sym-sun"/></svg>', aria: 'Light' },
         { val: 'dark', label: '<svg aria-hidden="true"><use href="#sym-moon"/></svg>', aria: 'Dark' }
       ], pref) + '<p class="hint" id="themeHint">' + THEME_HINTS[pref] + '</p></section>';
+    h += '<section class="card"><div class="card-head"><h3>Language</h3></div><div translate="no">' +
+      segHTML('lang', [{ val: 'en', label: 'English' }, { val: 'es', label: 'Español' }], I.getLang()) + '</div></section>';
 
     h += '<section class="card card-flush"><div class="card-head"><h3>Degree</h3></div>' +
       settingsRow('set-total', 'Total courses in degree', st.totalCourses ? st.totalCourses + ' courses' : 'Not set · optional, for whole-degree predictions') +
@@ -2661,7 +2688,7 @@
   var setup = null;
 
   function showSetup() {
-    setup = { step: 0, total: data.settings.totalCourses, passing: data.settings.passingGrade, tiers: data.settings.tiers.map(function (t) { return { id: t.id, name: t.name, target: t.target }; }), threshold: data.settings.defaultThreshold };
+    setup = { step: langPref() ? 0 : -1, total: data.settings.totalCourses, passing: data.settings.passingGrade, tiers: data.settings.tiers.map(function (t) { return { id: t.id, name: t.name, target: t.target }; }), threshold: data.settings.defaultThreshold };
     $('setup').classList.remove('hidden');
     renderSetup();
   }
@@ -2672,7 +2699,14 @@
     var s = setup;
     var progress = function (n) { return '<div class="setup-progress">' + [1, 2, 3].map(function (i) { return '<i class="' + (i <= n ? 'is-on' : '') + '"></i>'; }).join('') + '</div>'; };
     var h = '<div class="setup-inner">';
-    if (s.step === 0) {
+    if (s.step === -1) {
+      // Shown in both languages, before anything else.
+      h += '<div class="setup-mark"><svg class="brand-draw is-intro" viewBox="0 0 48 48" aria-hidden="true">' + MARK_PATHS + '</svg></div>' +
+        '<div translate="no"><h2>Choose your language<span class="setup-alt">Elige tu idioma</span></h2>' +
+        '<button class="choice" data-act="setup-lang" data-val="en"><b>English</b></button>' +
+        '<button class="choice" data-act="setup-lang" data-val="es"><b>Español</b></button>' +
+        '<p class="setup-small">You can change it later in Settings.<br>Puedes cambiarlo después en Ajustes.</p></div>';
+    } else if (s.step === 0) {
       h += '<div class="setup-mark"><svg class="brand-draw is-intro" viewBox="0 0 48 48" aria-hidden="true">' + MARK_PATHS + '</svg></div>' +
         '<h2>Every grade,<br>one clear average.</h2>' +
         '<p class="setup-lede">Ace It predicts your final grades, tells you what you need on what’s left, and tracks your cumulative average across your whole degree.</p>' +
@@ -2841,11 +2875,30 @@
     },
     'setup-back': function () { setup.step = Math.max(0, setup.step - 1); renderSetup(); },
     'setup-restore': function () { backupSheet(); },
-    'setup-rule': function (el) { setup.threshold = +el.dataset.val; renderSetup(); }
+    'setup-rule': function (el) { setup.threshold = +el.dataset.val; renderSetup(); },
+    'setup-lang': function (el) {
+      var l = el.dataset.val === 'es' ? 'es' : 'en';
+      S.setPref('lang', l);
+      I.setLang(l);
+      document.documentElement.setAttribute('lang', l);
+      if (l === 'es') {
+        // A new Spanish user's goals get Spanish names they can see and edit.
+        setup.tiers.forEach(function (t) { if (SPANISH_TIER_NAMES[t.name]) t.name = SPANISH_TIER_NAMES[t.name]; });
+        I.watch(document);
+        I.translateTree(document.body);
+      }
+      setup.step = 0;
+      renderSetup();
+    }
   };
 
   var SEGS = {
     theme: function (v) { setThemePref(v); },
+    lang: function (v) {
+      if (v === I.getLang()) return;
+      S.setPref('lang', v);
+      setTimeout(function () { location.reload(); }, 220);   // redraw everything in the new language
+    },
     'default-rule': function (v) { data.settings.defaultThreshold = +v; persist(); },
     'course-tab': function (v, group) {
       var screen = group.closest('.screen');
@@ -2969,6 +3022,7 @@
   wireTabBar();
   wireEdgeSwipe();
   wireHold();
+  I.watch(document);
   if (history.state && history.state.ace) history.replaceState(null, '');
   renderAll();
   goTab('overview');

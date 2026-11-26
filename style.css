@@ -995,3 +995,7 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
 .fs-was { color: var(--ink-soft); font-weight: 500; }
 .fs-line > span:last-child { display: flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
 .fs-line > span:last-child small.fs-was { display: inline; font-size: 0.78rem; }
+
+.setup-alt { display: block; font-size: 0.62em; font-weight: 600; color: var(--ink-soft); letter-spacing: -0.01em; margin-top: 0.35rem; }
+.whatif-open { white-space: nowrap; }
+.whatif-open small { overflow: hidden; text-overflow: ellipsis; min-width: 0; }

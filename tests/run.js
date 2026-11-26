@@ -276,6 +276,31 @@ test('backup round trip', function () {
   eq(bad, true);
 });
 
+console.log('Languages');
+var I18N = require('../i18n.js');
+require('../i18n-es.js');
+test('English is left exactly as written', function () {
+  I18N.setLang('en'); eq(I18N.tr('Enter final grades'), 'Enter final grades');
+});
+test('Spanish: exact strings, patterns, spacing kept, numbers untouched', function () {
+  I18N.setLang('es');
+  eq(I18N.tr('Overview'), 'Resumen');
+  eq(I18N.tr('  Settings '), '  Ajustes ');
+  eq(I18N.tr('9.57'), '9.57');
+  eq(I18N.tr('1 course'), '1 materia'); eq(I18N.tr('7 courses'), '7 materias');
+  eq(I18N.tr('Semester 2'), 'Semestre 2');
+  eq(I18N.tr('Something brand new'), 'Something brand new');   // unknown text stays as it was
+  I18N.setLang('en');
+});
+test('names the person typed are never translated', function () {
+  I18N.setLang('es');
+  I18N.setUserText(['Overview', 'Exams']);
+  eq(I18N.tr('Overview'), 'Overview');
+  I18N.setUserText([]);
+  eq(I18N.tr('Overview'), 'Resumen');
+  I18N.setLang('en');
+});
+
 var privateTests = path.join(__dirname, '..', '..', 'ace-it-private', 'seed.test.js');
 if (fs.existsSync(privateTests)) {
   console.log('Your data (private, outside the repo)');
