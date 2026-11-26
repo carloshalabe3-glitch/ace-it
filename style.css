@@ -936,7 +936,7 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
 .hold-backdrop { position: fixed; inset: 0; z-index: 72; background: rgba(26, 20, 20, 0); transition: background 240ms ease, -webkit-backdrop-filter 240ms ease, backdrop-filter 240ms ease; }
 .hold-backdrop.is-open { background: rgba(26, 20, 20, 0.16); -webkit-backdrop-filter: blur(14px) saturate(140%); backdrop-filter: blur(14px) saturate(140%); }
 :where([data-theme="dark"]) .hold-backdrop.is-open { background: rgba(0, 0, 0, 0.42); }
-.hold-panel { position: fixed; display: flex; flex-direction: column; gap: 0.55rem; transform: scale(0.97); opacity: 0; transition: transform 460ms var(--spring-bouncy), opacity 180ms ease; }
+.hold-panel { position: fixed; display: flex; flex-direction: column; gap: 0.55rem; transform: scale(0.97); opacity: 0; transition: transform 460ms var(--spring-bouncy), opacity 180ms ease, top 480ms var(--spring-smooth); }
 .hold-backdrop.is-open .hold-panel { transform: none; opacity: 1; }
 .hold-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.8rem 1rem; border-radius: 16px; background: var(--bg); color: var(--ink); box-shadow: 0 16px 40px -18px rgba(0, 0, 0, 0.5); pointer-events: none; }
 .hold-row .row-chev { display: none; }
@@ -946,3 +946,21 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
 .hold-act:active { background: var(--surface-2); }
 .hold-act svg { width: 20px; height: 20px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 @media (prefers-reduced-motion: reduce) { .hold-panel { transition: opacity 120ms; transform: none; } .up-row.is-arriving { animation: none; } }
+
+/* Enter grade: the menu becomes the grade box inside the same lifted card. */
+.hold-menu { transition: opacity 180ms ease, transform 300ms var(--spring-smooth), max-height 300ms var(--spring-smooth); max-height: 200px; }
+.hold-panel.is-grading .hold-menu { opacity: 0; transform: scale(0.96); max-height: 0; pointer-events: none; margin-top: -0.55rem; }
+.hold-grade { max-height: 0; opacity: 0; transform: translateY(-6px) scale(0.98); transform-origin: top center; overflow: hidden; pointer-events: none;
+  transition: max-height 420ms var(--spring-smooth), opacity 220ms ease 80ms, transform 420ms var(--spring-smooth); }
+.hold-panel.is-grading .hold-grade { max-height: 160px; opacity: 1; transform: none; pointer-events: auto; }
+.hg-field { display: flex; gap: 0.5rem; padding: 0.55rem; border-radius: 16px; background: var(--bg); box-shadow: 0 16px 40px -18px rgba(0, 0, 0, 0.5); }
+.hg-in { flex: 1; min-width: 0; border: 1.5px solid var(--line-strong); border-radius: 12px; background: var(--bg); color: var(--ink); font-size: 1.15rem; font-weight: 650; font-variant-numeric: tabular-nums; padding: 0.6rem 0.8rem; outline: none; -webkit-appearance: none; appearance: none; }
+.hg-in:focus { border-color: var(--accent); }
+.hg-save { flex-shrink: 0; border: none; border-radius: 12px; padding: 0 1.1rem; background: var(--accent); color: var(--on-accent); font-size: 1rem; font-weight: 650; transition: transform var(--spring-out); }
+.hg-save:active { transform: scale(0.95); transition-duration: var(--press-in); }
+.hg-hint { margin: 0.45rem 0.4rem 0; font-size: 0.8rem; color: var(--ink-soft); }
+:where([data-theme="dark"]) .hg-hint { color: var(--ink-soft); }
+.hg-hint.is-bad { color: var(--risk); font-weight: 600; }
+.hold-panel.is-shaking .hg-field { animation: hgShake 360ms ease; }
+@keyframes hgShake { 20% { transform: translateX(-6px); } 40% { transform: translateX(5px); } 60% { transform: translateX(-3px); } 80% { transform: translateX(2px); } }
+@media (prefers-reduced-motion: reduce) { .hold-panel, .hold-menu, .hold-grade { transition-duration: 1ms; } .hold-panel.is-shaking .hg-field { animation: none; } }

@@ -1125,12 +1125,18 @@
     var rect = row.getBoundingClientRect();
     var bd = document.createElement('div');
     bd.className = 'hold-backdrop';
+    // The menu and the grade box live in the same card: Enter grade turns one into the
+    // other in place, so there's never a second pop-up taking over.
     bd.innerHTML = '<div class="hold-panel"><div class="hold-row" aria-hidden="true">' + row.querySelector('.up-open').innerHTML + '</div>' +
       '<div class="hold-menu" role="menu" aria-label="' + esc(it.name) + '">' +
-      '<button class="hold-act" role="menuitem" data-hold="grade"><span>Enter grade</span>' + icon('edit') + '</button>' +
-      '</div></div>';
+      '<button class="hold-act" role="menuitem" data-hold="grade"><span>Enter grade</span>' + icon('edit') + '</button></div>' +
+      '<div class="hold-grade"><div class="hg-field"><input class="hg-in" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="done" placeholder="8.9 or 17/20" aria-label="Grade for ' + esc(it.name) + '" tabindex="-1">' +
+      '<button type="button" class="hg-save">Save</button></div><p class="hg-hint">Out of 10, or as points like 17/20.</p></div>' +
+      '</div>';
     document.body.appendChild(bd);
     var panel = bd.querySelector('.hold-panel');
+    var inp = bd.querySelector('.hg-in');
+    var hint = bd.querySelector('.hg-hint');
     panel.style.left = rect.left + 'px';
     panel.style.width = rect.width + 'px';
     var hgt = panel.offsetHeight;
@@ -1138,41 +1144,47 @@
     panel.style.top = top + 'px';
     void bd.offsetWidth;
     bd.classList.add('is-open');
-    bd.addEventListener('click', function (e) {
-      var a = e.target.closest('[data-hold]');
-      closeTaskMenu();
-      if (!a) return;
-      if (a.dataset.hold === 'grade') gradeSheet(c, it);
-    });
-  }
 
-  // Enter a pending task's grade in one step.
-  function gradeSheet(c, it) {
-    openSheet('<h2>' + esc(it.name) + '</h2><p class="sheet-text" style="margin-bottom:0.9rem">' + esc(c.name) + '</p>' +
-      '<div class="field"><label for="gIn">Grade</label><input type="text" id="gIn" inputmode="decimal" autocomplete="off" enterkeyhint="done" placeholder="8.9 or 17/20">' +
-      '<p class="field-hint" id="gHint">Out of 10, or as points like 17/20.</p></div>' +
-      '<div class="field-error" data-main></div>' +
-      '<div class="sheet-actions"><button class="btn" data-act="cancel">Cancel</button><button class="btn btn-primary" data-act="save">Save grade</button></div>', function (bd) {
-      var inp = q(bd, '#gIn');
-      inp.focus();
-      inp.addEventListener('input', function () {
-        var p = G.parseScore(inp.value);
-        q(bd, '#gHint').textContent = p && isNum(p.max) ? 'That’s ' + G.fmtNum(p.score, 4) + ' out of 10.' : 'Out of 10, or as points like 17/20.';
-        setErr(bd, '');
-      });
-      inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); bd._acts.save(); } });
-      bd._acts.cancel = function () { closeSheet(bd); };
-      bd._acts.save = function () {
-        var p = G.parseScore(inp.value);
-        if (!p) { setErr(bd, 'Enter a grade from 0 to 10, or points like 17/20.'); return; }
-        it.status = 'graded';
-        it.score = p.score;
-        it.points = isNum(p.max) ? p.points : null;
-        it.max = isNum(p.max) ? p.max : null;
-        it.done = false;
-        closeSheet(bd);
-        commit(it.name + ' · ' + (isNum(p.max) ? G.fmtNum(p.points, 4) + '/' + G.fmtNum(p.max, 4) : G.fmtNum(p.score, 4)));
-      };
+    function startGrading() {
+      bd._grading = true;
+      // Glide up out of the keyboard's way while the menu turns into the grade box.
+      var safeTop = parseFloat(getComputedStyle(document.body).paddingTop) || 0;
+      panel.style.top = Math.min(top, safeTop + 56) + 'px';
+      panel.classList.add('is-grading');
+      inp.removeAttribute('tabindex');
+      inp.focus({ preventScroll: true });   // in the tap itself, so the iPhone keyboard opens
+    }
+    function save() {
+      var p = G.parseScore(inp.value);
+      if (!p) {
+        hint.textContent = inp.value.trim() ? 'Use 0 to 10, or points like 17/20.' : 'Type the grade first.';
+        hint.classList.add('is-bad');
+        panel.classList.remove('is-shaking'); void panel.offsetWidth; panel.classList.add('is-shaking');
+        inp.focus({ preventScroll: true });
+        return;
+      }
+      it.status = 'graded';
+      it.score = p.score;
+      it.points = isNum(p.max) ? p.points : null;
+      it.max = isNum(p.max) ? p.max : null;
+      it.done = false;
+      inp.blur();
+      closeTaskMenu();
+      var label = it.name + ' · ' + (isNum(p.max) ? G.fmtNum(p.points, 4) + '/' + G.fmtNum(p.max, 4) : G.fmtNum(p.score, 4));
+      slideRows(it.id, function () { commit(label); });
+    }
+    inp.addEventListener('input', function () {
+      var p = G.parseScore(inp.value);
+      hint.classList.remove('is-bad');
+      hint.textContent = p && isNum(p.max) ? 'That’s ' + G.fmtNum(p.score, 4) + ' out of 10.' : 'Out of 10, or as points like 17/20.';
+    });
+    inp.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); save(); } });
+    bd.querySelector('.hg-save').addEventListener('click', function (e) { e.stopPropagation(); save(); });
+    bd.addEventListener('click', function (e) {
+      if (bd._grading) { if (!e.target.closest('.hold-panel')) { inp.blur(); closeTaskMenu(); } return; }
+      var a = e.target.closest('[data-hold]');
+      if (a && a.dataset.hold === 'grade') { startGrading(); return; }
+      closeTaskMenu();
     });
   }
 
