@@ -964,3 +964,34 @@ button.proj:active { transform: scale(0.97); transition-duration: var(--press-in
 .hold-panel.is-shaking .hg-field { animation: hgShake 360ms ease; }
 @keyframes hgShake { 20% { transform: translateX(-6px); } 40% { transform: translateX(5px); } 60% { transform: translateX(-3px); } 80% { transform: translateX(2px); } }
 @media (prefers-reduced-motion: reduce) { .hold-panel, .hold-menu, .hold-grade { transition-duration: 1ms; } .hold-panel.is-shaking .hg-field { animation: none; } }
+
+/* ================================================================
+   End of term: final grades
+   ================================================================ */
+
+.finals-open { margin-top: 0.85rem; justify-content: flex-start; gap: 0.6rem; padding: 0.75rem 1rem; text-align: left; background: var(--accent-tint); color: var(--accent-deep); }
+.finals-open svg { width: 20px; height: 20px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.finals-open small { margin-left: auto; font-weight: 500; font-size: 0.8rem; color: var(--ink-soft); }
+.fg-list, .fg-done { border-radius: var(--r-m); background: var(--surface); overflow: hidden; }
+.fg-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.7rem 0.9rem; border-top: 1px solid var(--line); }
+.fg-row:first-child { border-top: none; }
+.fg-main { flex: 1; min-width: 0; }
+.fg-main .row-sub { display: block; }
+.fg-end { display: flex; align-items: center; gap: 0.45rem; flex-shrink: 0; }
+.fg-fin { font-size: 0.85rem; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+.fg-in { width: 70px; text-align: center; font-size: 1.1rem; font-weight: 650; font-variant-numeric: tabular-nums; border: 1.5px solid var(--line-strong); background: var(--bg); color: var(--ink); border-radius: 11px; padding: 0.45rem 0.4rem; min-height: 42px; outline: none; -webkit-appearance: none; appearance: none; }
+.fg-in::placeholder { color: var(--ink-mute); font-weight: 500; }
+.fg-in:focus { border-color: var(--accent); }
+.fg-row.is-set .fg-in { border-color: var(--accent); color: var(--accent); }
+.fg-row.is-bad .fg-in { border-color: var(--risk); color: var(--risk); }
+.fg-row.is-final { justify-content: space-between; }
+.fg-row.is-final .row-title { color: var(--ink-soft); font-weight: 500; }
+.fg-final { font-variant-numeric: tabular-nums; }
+.fs-card { border-radius: var(--r-m); background: var(--surface); padding: 0.2rem 0.9rem; }
+.fs-line { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.65rem 0; border-top: 1px solid var(--line); }
+.fs-line:first-child { border-top: none; }
+.fs-line small { display: block; font-size: 0.76rem; color: var(--ink-soft); }
+.fs-line b { font-size: 1.1rem; font-weight: 700; color: var(--accent); }
+.fs-was { color: var(--ink-soft); font-weight: 500; }
+.fs-line > span:last-child { display: flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
+.fs-line > span:last-child small.fs-was { display: inline; font-size: 0.78rem; }

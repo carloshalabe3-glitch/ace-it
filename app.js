@@ -1385,6 +1385,10 @@
       h += '<div class="big-grade"><div class="big-label">' + (avg.official ? 'Term average' : 'Projected term average') + '</div>' +
         '<div class="pair pair-lg"><span class="raw"' + countAttr('tavg', avg.average) + '>' + G.fmtAvg(avg.average) + '</span></div></div>';
     }
+    var stillOpen = cs.filter(function (c) { return !isFinal(c); }).length;
+    if (stillOpen) {
+      h += '<button class="btn btn-block finals-open" data-act="enter-finals" data-id="' + t.id + '">' + icon('check') + 'Enter final grades<small>' + plural(stillOpen, 'course') + ' in progress</small></button>';
+    }
     if (cs.length) {
       h += '<section class="card card-flush">' + cs.map(function (c) { return courseRowHTML(c, c.professor); }).join('') +
         '<button class="add-row" data-act="add-course" data-term="' + t.id + '"><svg><use href="#sym-plus"/></svg>Add a course</button></section>';
@@ -2343,6 +2347,110 @@
     return base + ' ' + (cat.items.length + 1);
   }
 
+  // ---------- end of term: enter the official finals in one place ----------
+
+  function finalsNotes(c, r) {
+    var notes = [];
+    if (c.mode === 'weighted' && r.pendingSlots.length) notes.push(plural(r.pendingSlots.length, 'item') + ' pending');
+    var owed = G.hasPendingAdjustments(c.adjustments) || (c.categories || []).some(function (g) { return g.items.some(function (it) { return G.hasPendingAdjustments(it.adjustments); }); });
+    if (owed) notes.push('owed points');
+    if (r.estimate) notes.push('estimate');
+    if (!c.counts) notes.push('not counted');
+    return notes;
+  }
+
+  function finalsSheet(t) {
+    var cs = coursesOf(t.id);
+    var open = cs.filter(function (c) { return !isFinal(c); });
+    var already = cs.filter(isFinal);
+    var rows = open.map(function (c) {
+      var r = result(c), th = thr(c);
+      var exp = isNum(r.expected) ? G.fmtRaw(r.expected, th) + ' → ' + r.expectedFinal : '–';
+      var notes = finalsNotes(c, r);
+      return '<div class="fg-row" data-id="' + c.id + '"><div class="fg-main"><span class="row-title">' + esc(c.name) + '</span>' +
+        '<span class="row-sub">Expected ' + exp + (notes.length ? ' · ' + esc(notes.join(', ')) : '') + '</span></div>' +
+        '<div class="fg-end"><span class="fg-fin" aria-live="polite"></span><input class="fg-in" type="text" inputmode="decimal" autocomplete="off" enterkeyhint="next" placeholder="' + (isNum(r.expectedFinal) ? r.expectedFinal : '') + '" aria-label="Official final for ' + esc(c.name) + '"></div></div>';
+    }).join('');
+    var done = already.length ? '<div class="sheet-section">Already final</div><div class="fg-done">' + already.map(function (c) {
+      return '<div class="fg-row is-final"><span class="row-title">' + esc(c.name) + '</span><b class="fg-final">' + result(c).final + '</b></div>';
+    }).join('') + '</div>' : '';
+    openSheet('<h2>Final grades</h2><p class="sheet-text">' + esc(termLabel(t)) + '. Type each final as the school posts it, and leave the rest blank for later.</p>' +
+      '<div class="fg-list">' + rows + '</div>' + done +
+      '<div class="field-error" data-main></div>' +
+      '<div class="sheet-actions"><button class="btn" data-act="cancel">Cancel</button><button class="btn btn-primary" data-act="save">Save finals</button></div>', function (bd) {
+      var inputs = Array.prototype.slice.call(bd.querySelectorAll('.fg-in'));
+      function read(inp) {
+        var text = inp.value.trim().replace(',', '.');
+        if (!text) return { empty: true };
+        var v = Number(text);
+        return isFinite(v) && v >= 0 && v <= 10 ? { v: v } : { bad: true };
+      }
+      inputs.forEach(function (inp, i) {
+        var row = inp.closest('.fg-row'), c = courseById(row.dataset.id);
+        inp.addEventListener('input', function () {
+          var x = read(inp);
+          row.classList.toggle('is-bad', !!x.bad);
+          row.classList.toggle('is-set', isNum(x.v));
+          // A grade with decimals shows what it rounds to under this course's rule.
+          row.querySelector('.fg-fin').textContent = isNum(x.v) && Math.round(x.v) !== x.v ? '→ ' + G.roundFinal(x.v, thr(c)) : '';
+          setErr(bd, '');
+        });
+        inp.addEventListener('keydown', function (e) {
+          if (e.key !== 'Enter') return;
+          e.preventDefault();
+          if (inputs[i + 1]) inputs[i + 1].focus(); else inp.blur();
+        });
+      });
+      bd._acts.cancel = function () { closeSheet(bd); };
+      bd._acts.save = function () {
+        var picks = [], bad = false;
+        inputs.forEach(function (inp) {
+          var x = read(inp);
+          if (x.bad) bad = true;
+          else if (isNum(x.v)) picks.push({ c: courseById(inp.closest('.fg-row').dataset.id), v: x.v });
+        });
+        if (bad) { setErr(bd, 'Finals go from 0 to 10.'); return; }
+        if (!picks.length) { setErr(bd, 'Type at least one final grade, or tap Cancel.'); return; }
+        var before = G.summarize(data);
+        picks.forEach(function (p) { p.c.posted = p.v; p.c.done = true; });
+        persist();
+        closeSheet(bd);
+        renderAll();
+        setTimeout(function () { finalsSummary(t, before, picks.length); }, 260);
+      };
+    });
+  }
+
+  // What the new finals did: the term, your cumulative, and each goal.
+  function finalsSummary(t, before, saved) {
+    var after = G.summarize(data);
+    var cs = coursesOf(t.id);
+    var left = cs.filter(function (c) { return !isFinal(c); }).length;
+    var tavg = G.termAverage(data, t.id);
+    function line(label, was, now, note) {
+      var changed = isNum(was) && isNum(now) && Math.abs(was - now) > 1e-9;
+      return '<div class="fs-line"><span>' + label + (note ? '<small>' + note + '</small>' : '') + '</span><span class="num">' +
+        (changed ? '<span class="fs-was">' + G.fmtAvg(was) + '</span> → ' : '') + '<b>' + (isNum(now) ? G.fmtAvg(now) : '–') + '</b></span></div>';
+    }
+    var h = '<h2>' + esc(termLabel(t)) + '</h2><p class="sheet-text">' + plural(saved, 'final') + ' saved. ' +
+      (left ? plural(left, 'course') + ' still in progress.' : 'Every course in this term is final.') + '</p><div class="fs-card">' +
+      line(left ? 'Term average so far' : 'Term average', null, tavg.average) +
+      line('Cumulative', before.official, after.official, 'official') +
+      (after.remaining > 0 ? line('Projected', before.projected, after.projected) : '') + '</div>';
+    if (after.tiers.length) {
+      h += '<div class="sheet-section">Goals</div><div class="fs-card">' + after.tiers.map(function (tier) {
+        var was = (before.tiers.filter(function (x) { return x.id === tier.id; })[0] || {}).status;
+        var st = TIER_STATUS[tier.status] || TIER_STATUS.out;
+        var moved = was && was !== tier.status;
+        return '<div class="fs-line"><span>' + esc(tier.name) + ' <span class="cat-weight">' + G.fmtNum(tier.target) + '</span></span><span>' +
+          (moved ? '<small class="fs-was">' + esc((TIER_STATUS[was] || {}).label || '') + ' → </small>' : '') +
+          '<span class="chip ' + (st.kind ? 'chip-' + st.kind : '') + '">' + st.label + '</span></span></div>';
+      }).join('') + '</div>';
+    }
+    h += '<div class="sheet-actions"><button class="btn btn-primary" data-act="done">Done</button></div>';
+    openSheet(h, function (bd) { bd._acts.done = function () { closeSheet(bd); }; });
+  }
+
   // ---------- course adjustments, expected, posted ----------
 
   function adjustmentsSheet(c) {
@@ -2675,6 +2783,7 @@
     },
     'add-term': function () { termSheet(null); },
     'edit-term': function (el) { termSheet(termById(el.dataset.id)); },
+    'enter-finals': function (el) { var t = termById(el.dataset.id); if (t) finalsSheet(t); },
     'add-course': function (el) {
       if (!data.terms.length) { termSheet(null); return; }
       courseSheet(null, el.dataset.term);
